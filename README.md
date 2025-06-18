@@ -41,7 +41,7 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
 
 2. 拉取Pinchy镜像
    ```bash
-   docker pull 3ixi/pinchy:latest
+   docker pull crpi-9kf3ygmifxk82biy.cn-chengdu.personal.cr.aliyuncs.com/pinchy/pinchy:latest
    ```
 
 3. 运行Docker容器
