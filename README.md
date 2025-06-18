@@ -31,7 +31,7 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
 4. 运行pinchy-launcher.exe
 5. 配置运行端口和选择是否开启外部访问（开启后才能通过其他设备访问）
 6. 点击“启动服务”按钮等待启动完成，窗口右侧会显示启动状态（显示“Application startup complete.”即表示启动完成）
-7. 访问系统地址，默认端口为8000，如http://127.0.0.1:8000（默认账号admin密码admin）
+7. 访问系统地址，默认端口为8000，如http://127.0.0.1:8000  （默认账号admin密码admin）
 
 ### 2. Docker安装/运行
 
@@ -39,7 +39,7 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
    ```bash
    docker pull crpi-9kf3ygmifxk82biy.cn-chengdu.personal.cr.aliyuncs.com/pinchy/pinchy:latest
    ```
-2. 运行容器，访问系统地址，默认端口为8000，如http://服务器IP:8000（默认账号admin密码admin）
+2. 运行容器，访问系统地址，默认端口为8000，如http://服务器IP:8000  （默认账号admin密码admin）
 
 ### 3. Linux安装/运行
 
@@ -164,7 +164,7 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
    tail -f pinchy.log
    ```
 
-6. 访问系统地址，默认端口为8000，如http://服务器IP:8000（默认账号admin密码admin）
+6. 访问系统地址，默认端口为8000，如http://服务器IP:8000  （默认账号admin密码admin）
 
 **⚠️ 首次登录后请立即修改默认密码！**
 
