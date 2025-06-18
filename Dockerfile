@@ -20,6 +20,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# 创建必要的目录
+RUN mkdir -p logs scripts static
+
+# 设置环境变量
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHON_COMMAND=python3
+ENV SECRET_KEY=1b3c86abc6a54741b6f29d89d5148e42_pinchy
+
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "run.py"]
