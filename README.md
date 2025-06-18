@@ -33,7 +33,8 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
 7. 访问系统地址，默认端口为8000，如http://127.0.0.1:8000
 
 ### 2. Docker安装/运行
-
+稍后更新
+<!--
 1. 确保已安装Docker
    ```bash
    docker --version
@@ -69,7 +70,7 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
    # 重启容器
    docker start pinchy
    ```
-
+-->
 ### 3. Linux安装/运行
 
 1. 确保已安装Python 3.10+、Node.js和Git
