@@ -17,6 +17,7 @@ from app.database import get_db
 from app.auth import get_current_user, get_password_hash, verify_password
 from app.models import User, SystemVersion, SystemUUID, SystemConfig, TaskLog, NotificationConfig, EnvironmentVariable
 from app.security import security_manager
+from app.version import get_current_version, get_version_description, get_version_info, is_newer_version
 
 router = APIRouter(prefix="/api/settings", tags=["系统设置"])
 
@@ -186,15 +187,29 @@ async def get_system_version(current_user: User = Depends(get_current_user), db:
     """获取系统版本"""
     version = db.query(SystemVersion).filter(SystemVersion.is_current == True).first()
     if not version:
-        # 如果没有版本记录，创建默认版本
-        version = SystemVersion(version="1.25.1", description="Pinchy - Python、Node.js脚本调度执行系统", is_current=True)
-        db.add(version)
-        db.commit()
-        db.refresh(version)
+        # 如果数据库中没有版本信息，返回应用配置的版本
+        current_version = get_current_version()
+        current_description = get_version_description()
+        version_info = get_version_info(current_version)
 
+        return {
+            "version": current_version,
+            "description": current_description,
+            "release_date": version_info.get("release_date"),
+            "features": version_info.get("features", []),
+            "bug_fixes": version_info.get("bug_fixes", []),
+            "source": "config"  # 标识来源于配置文件
+        }
+
+    # 从数据库获取版本信息，并补充详细信息
+    version_info = get_version_info(version.version)
     return {
         "version": version.version,
-        "description": version.description
+        "description": version.description,
+        "release_date": version_info.get("release_date"),
+        "features": version_info.get("features", []),
+        "bug_fixes": version_info.get("bug_fixes", []),
+        "source": "database"  # 标识来源于数据库
     }
 
 @router.get("/color-scheme")
@@ -435,7 +450,10 @@ async def check_version_update(current_user: User = Depends(get_current_user), d
         # 获取当前版本
         version = db.query(SystemVersion).filter(SystemVersion.is_current == True).first()
         if not version:
-            version = SystemVersion(version="1.25.1", description="Pinchy - Python、Node.js脚本调度执行系统", is_current=True)
+            # 使用配置文件中的版本信息
+            current_version = get_current_version()
+            current_description = get_version_description()
+            version = SystemVersion(version=current_version, description=current_description, is_current=True)
             db.add(version)
             db.commit()
             db.refresh(version)
@@ -992,13 +1010,62 @@ async def test_package_manager(
         )
 
 def init_system_version(db: Session):
-    """初始化系统版本"""
+    """初始化或更新系统版本"""
+    current_app_version = get_current_version()
+    current_description = get_version_description()
+
+    # 查找当前版本记录
     version = db.query(SystemVersion).filter(SystemVersion.is_current == True).first()
+
     if not version:
-        version = SystemVersion(version="1.25.1", description="Pinchy - Python、Node.js脚本调度执行系统", is_current=True)
+        # 如果没有版本记录，创建新的
+        version = SystemVersion(
+            version=current_app_version,
+            description=current_description,
+            is_current=True
+        )
         db.add(version)
         db.commit()
-        print("已初始化系统版本: 1.25.1")
+        print(f"已初始化系统版本: {current_app_version}")
+    else:
+        # 如果已有版本记录，检查是否需要更新
+        if version.version != current_app_version:
+            # 版本号不同，需要更新
+            old_version = version.version
+
+            # 将旧版本标记为非当前版本（保留历史记录）
+            version.is_current = False
+
+            # 创建新的版本记录
+            new_version = SystemVersion(
+                version=current_app_version,
+                description=current_description,
+                is_current=True
+            )
+            db.add(new_version)
+            db.commit()
+
+            print(f"🔄 系统版本已更新: {old_version} → {current_app_version}")
+
+            # 记录版本更新信息
+            version_info = get_version_info(current_app_version)
+            if version_info:
+                print(f"📝 版本更新说明: {version_info.get('description', '')}")
+                features = version_info.get('features', [])
+                if features:
+                    print("✨ 新功能:")
+                    for feature in features[:3]:  # 只显示前3个
+                        print(f"   - {feature}")
+                    if len(features) > 3:
+                        print(f"   ... 还有 {len(features) - 3} 个新功能")
+        else:
+            # 版本号相同，检查描述是否需要更新
+            if version.description != current_description:
+                version.description = current_description
+                db.commit()
+                print(f"📝 系统版本描述已更新: {current_app_version}")
+            else:
+                print(f"✅ 系统版本已是最新: {current_app_version}")
 
 def init_system_uuid(db: Session):
     """初始化系统UUID"""

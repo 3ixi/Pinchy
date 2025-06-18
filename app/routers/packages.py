@@ -178,17 +178,39 @@ async def install_package_with_websocket(package_data: PackageInstall, db: Sessi
 
         # 创建子进程并实时读取输出
         import os
+        import platform
         cwd = os.getcwd()  # 使用当前工作目录而不是固定的/scripts
+        is_windows = platform.system().lower() == 'windows'
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,  # 将stderr重定向到stdout
-            cwd=cwd
-        )
+        # 在Windows上，某些包管理器需要shell=True
+        if is_windows and package_data.package_type == "nodejs":
+            # 对于Windows上的Node.js包管理器，使用shell模式
+            cmd_str = ' '.join(cmd)
+            process = await asyncio.create_subprocess_shell(
+                cmd_str,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,  # 将stderr重定向到stdout
+                cwd=cwd
+            )
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,  # 将stderr重定向到stdout
+                cwd=cwd
+            )
+
+        # 发送命令信息到WebSocket
+        cmd_display = cmd_str if is_windows and package_data.package_type == "nodejs" else ' '.join(cmd)
+        await websocket_manager.broadcast({
+            "type": "package_install_output",
+            "output": f"执行命令: {cmd_display}"
+        }, "global")
 
         # 实时读取输出
         while True:
+            if process.stdout is None:
+                break
             line = await process.stdout.readline()
             if not line:
                 break
@@ -261,17 +283,32 @@ async def uninstall_package_with_websocket(package_type: str, package_name: str,
 
         # 创建子进程并实时读取输出
         import os
+        import platform
         cwd = os.getcwd()
+        is_windows = platform.system().lower() == 'windows'
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,  # 将stderr重定向到stdout
-            cwd=cwd
-        )
+        # 在Windows上，某些包管理器需要shell=True
+        if is_windows and package_type == "nodejs":
+            # 对于Windows上的Node.js包管理器，使用shell模式
+            cmd_str = ' '.join(cmd)
+            process = await asyncio.create_subprocess_shell(
+                cmd_str,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,  # 将stderr重定向到stdout
+                cwd=cwd
+            )
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,  # 将stderr重定向到stdout
+                cwd=cwd
+            )
 
         # 实时读取输出
         while True:
+            if process.stdout is None:
+                break
             line = await process.stdout.readline()
             if not line:
                 break
@@ -343,17 +380,88 @@ async def list_python_packages(current_user: User = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取Python包列表失败: {str(e)}")
 
+def detect_docker_environment():
+    """检测是否在Docker环境中运行"""
+    import os
+    try:
+        return (
+            os.path.exists('/.dockerenv') or
+            os.environ.get('DOCKER_CONTAINER') == 'true' or
+            (os.path.exists('/proc/1/cgroup') and 'docker' in open('/proc/1/cgroup').read())
+        )
+    except Exception:
+        return False
+
+def get_npm_global_paths():
+    """获取npm全局安装路径"""
+    import subprocess
+    import platform
+
+    is_windows = platform.system().lower() == 'windows'
+    is_docker = detect_docker_environment()
+
+    paths = []
+
+    try:
+        # 获取npm全局路径
+        result = subprocess.run(
+            ["npm", "root", "-g"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=is_windows
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            paths.append(result.stdout.strip())
+    except Exception:
+        pass
+
+    try:
+        # 获取npm配置的prefix路径
+        result = subprocess.run(
+            ["npm", "config", "get", "prefix"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=is_windows
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            prefix_path = result.stdout.strip()
+            if is_windows:
+                paths.append(f"{prefix_path}\\node_modules")
+            else:
+                paths.append(f"{prefix_path}/lib/node_modules")
+    except Exception:
+        pass
+
+    # Docker环境下的常见路径
+    if is_docker:
+        paths.extend([
+            "/usr/local/lib/node_modules",
+            "/usr/lib/node_modules",
+            "/app/node_modules"
+        ])
+
+    return list(set(paths))  # 去重
+
 @router.get("/nodejs/list", response_model=List[InstalledPackage])
 async def list_nodejs_packages(current_user: User = Depends(get_current_user)):
     """列出已安装的Node.js包"""
+    import platform
+    import os
+    is_windows = platform.system().lower() == 'windows'
+    is_docker = detect_docker_environment()
+
+    packages = []
+
     try:
-        # 首先尝试使用 npm list -g --json --depth=0
+        # 方法1: 使用 npm list -g --json --depth=0
         result = subprocess.run(
             ["npm", "list", "-g", "--json", "--depth=0"],
             capture_output=True,
             text=True,
             timeout=30,
-            shell=True  # 在Windows上使用shell
+            shell=is_windows
         )
 
         # npm list 命令即使成功也可能返回非0状态码（如果有警告）
@@ -361,49 +469,141 @@ async def list_nodejs_packages(current_user: User = Depends(get_current_user)):
             try:
                 packages_data = json.loads(result.stdout)
                 dependencies = packages_data.get("dependencies", {})
-                return [
+                packages.extend([
                     InstalledPackage(name=name, version=info.get("version", "unknown") if isinstance(info, dict) else str(info))
                     for name, info in dependencies.items()
-                ]
-            except json.JSONDecodeError:
+                ])
+
+                # 如果成功获取到包，记录调试信息
+                if packages:
+                    print(f"✓ 通过npm list获取到 {len(packages)} 个包")
+
+            except json.JSONDecodeError as e:
+                print(f"JSON解析失败: {e}")
                 pass  # 如果JSON解析失败，继续尝试其他方法
 
-        # 如果JSON方法失败，尝试使用简单的 npm list -g
-        result = subprocess.run(
-            ["npm", "list", "-g", "--depth=0"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            shell=True  # 在Windows上使用shell
-        )
+        # 方法2: 如果JSON方法失败或没有获取到包，尝试使用简单的 npm list -g
+        if not packages:
+            print("尝试使用文本格式获取包列表...")
+            try:
+                result = subprocess.run(
+                    ["npm", "list", "-g", "--depth=0"],
+                    capture_output=True,
+                    timeout=30,
+                    shell=is_windows,
+                    encoding='utf-8',
+                    errors='ignore'  # 忽略编码错误
+                )
+            except Exception as e:
+                print(f"文本格式命令执行失败: {e}")
+                result = None
 
-        packages = []
-        if result.stdout:
-            lines = result.stdout.split('\n')
-            for line in lines:
-                line = line.strip()
-                # 处理格式如: +-- package-name@version 或 `-- package-name@version
-                if line and '@' in line:
-                    # 移除前缀符号
-                    if line.startswith(('+--', '`--', '├──', '└──')):
-                        line = line[3:].strip()
-                    elif line.startswith('│'):
-                        continue  # 跳过树形结构的连接线
+            if result and result.stdout:
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    # 处理格式如: +-- package-name@version 或 `-- package-name@version
+                    if line and '@' in line:
+                        # 移除前缀符号
+                        if line.startswith(('+--', '`--', '├──', '└──')):
+                            line = line[3:].strip()
+                        elif line.startswith('│'):
+                            continue  # 跳过树形结构的连接线
 
-                    # 跳过npm自身和一些系统包（但保留用户安装的包）
-                    if any(skip in line.lower() for skip in ['npm@', 'node@']):
-                        continue
+                        # 跳过npm自身和一些系统包（但保留用户安装的包）
+                        if any(skip in line.lower() for skip in ['npm@', 'node@']):
+                            continue
 
-                    # 解析包名和版本
-                    if '@' in line:
-                        parts = line.split('@')
-                        if len(parts) >= 2:
-                            name = '@'.join(parts[:-1]) if parts[0] == '' else parts[0]
-                            version = parts[-1]
-                            # 清理包名中的特殊字符
-                            name = name.strip(' ├└│─`+')
-                            if name and version:
-                                packages.append(InstalledPackage(name=name, version=version))
+                        # 解析包名和版本
+                        if '@' in line:
+                            parts = line.split('@')
+                            if len(parts) >= 2:
+                                name = '@'.join(parts[:-1]) if parts[0] == '' else parts[0]
+                                version = parts[-1]
+                                # 清理包名中的特殊字符
+                                name = name.strip(' ├└│─`+')
+                                if name and version:
+                                    packages.append(InstalledPackage(name=name, version=version))
+
+                if packages:
+                    print(f"✓ 通过文本解析获取到 {len(packages)} 个包")
+
+        # 方法3: 在Docker环境下，直接扫描node_modules目录
+        if is_docker and not packages:
+            print("Docker环境下尝试直接扫描node_modules目录...")
+            npm_paths = get_npm_global_paths()
+
+            for npm_path in npm_paths:
+                if os.path.exists(npm_path):
+                    print(f"扫描路径: {npm_path}")
+                    try:
+                        for item in os.listdir(npm_path):
+                            item_path = os.path.join(npm_path, item)
+                            if os.path.isdir(item_path) and not item.startswith('.'):
+                                # 跳过npm自身和一些系统包
+                                if item in ['npm', 'node']:
+                                    continue
+
+                                # 尝试读取package.json获取版本信息
+                                package_json_path = os.path.join(item_path, 'package.json')
+                                version = "unknown"
+                                if os.path.exists(package_json_path):
+                                    try:
+                                        with open(package_json_path, 'r', encoding='utf-8') as f:
+                                            package_info = json.load(f)
+                                            version = package_info.get('version', 'unknown')
+                                    except Exception:
+                                        pass
+
+                                # 检查是否已经在列表中
+                                if not any(pkg.name == item for pkg in packages):
+                                    packages.append(InstalledPackage(name=item, version=version))
+                    except Exception as e:
+                        print(f"扫描目录 {npm_path} 失败: {e}")
+
+            if packages:
+                print(f"✓ 通过目录扫描获取到 {len(packages)} 个包")
+
+        # 方法4: 尝试获取本地安装的包（如果存在package.json）
+        try:
+            if os.path.exists("package.json"):
+                print("检测到package.json，尝试获取本地包...")
+                result = subprocess.run(
+                    ["npm", "list", "--json", "--depth=0"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    shell=is_windows
+                )
+
+                if result.stdout and result.stdout.strip():
+                    try:
+                        local_packages_data = json.loads(result.stdout)
+                        local_dependencies = local_packages_data.get("dependencies", {})
+                        local_count = 0
+                        # 添加本地包，但标记为本地安装
+                        for name, info in local_dependencies.items():
+                            version = info.get("version", "unknown") if isinstance(info, dict) else str(info)
+                            # 检查是否已经在全局包列表中
+                            if not any(pkg.name == name for pkg in packages):
+                                packages.append(InstalledPackage(name=f"{name} (本地)", version=version))
+                                local_count += 1
+
+                        if local_count > 0:
+                            print(f"✓ 获取到 {local_count} 个本地包")
+                    except json.JSONDecodeError:
+                        pass
+        except Exception:
+            pass  # 忽略本地包获取错误
+
+        # 输出最终结果
+        print(f"最终获取到 {len(packages)} 个Node.js包")
+        if packages:
+            print("包列表:")
+            for pkg in packages[:10]:  # 只显示前10个
+                print(f"  - {pkg.name}@{pkg.version}")
+            if len(packages) > 10:
+                print(f"  ... 还有 {len(packages) - 10} 个包")
 
         return packages
 
@@ -512,4 +712,75 @@ async def get_package_manager_config_api(
         return {
             "python_package_manager": "pip",
             "nodejs_package_manager": "npm"
+        }
+
+@router.get("/debug/environment")
+async def get_debug_environment_info(current_user: User = Depends(get_current_user)):
+    """获取环境调试信息"""
+    import platform
+    import os
+
+    try:
+        is_docker = detect_docker_environment()
+        is_windows = platform.system().lower() == 'windows'
+        npm_paths = get_npm_global_paths()
+
+        # 检查npm版本
+        npm_version = "未知"
+        try:
+            result = subprocess.run(
+                ["npm", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=is_windows
+            )
+            if result.returncode == 0:
+                npm_version = result.stdout.strip()
+        except Exception:
+            pass
+
+        # 检查node版本
+        node_version = "未知"
+        try:
+            result = subprocess.run(
+                ["node", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=is_windows
+            )
+            if result.returncode == 0:
+                node_version = result.stdout.strip()
+        except Exception:
+            pass
+
+        # 检查路径是否存在
+        path_status = {}
+        for path in npm_paths:
+            path_status[path] = {
+                "exists": os.path.exists(path),
+                "is_dir": os.path.isdir(path) if os.path.exists(path) else False,
+                "readable": os.access(path, os.R_OK) if os.path.exists(path) else False
+            }
+
+        return {
+            "platform": platform.system(),
+            "is_docker": is_docker,
+            "is_windows": is_windows,
+            "npm_version": npm_version,
+            "node_version": node_version,
+            "npm_paths": npm_paths,
+            "path_status": path_status,
+            "working_directory": os.getcwd(),
+            "environment_variables": {
+                "NODE_PATH": os.environ.get("NODE_PATH"),
+                "NPM_CONFIG_PREFIX": os.environ.get("NPM_CONFIG_PREFIX"),
+                "PATH": os.environ.get("PATH", "")[:200] + "..." if len(os.environ.get("PATH", "")) > 200 else os.environ.get("PATH", "")
+            }
+        }
+    except Exception as e:
+        return {
+            "error": f"获取环境信息失败: {str(e)}",
+            "platform": platform.system()
         }

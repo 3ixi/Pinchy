@@ -14,6 +14,7 @@ from app.auth import init_admin_user, get_current_user
 from app.scheduler import task_scheduler
 from app.websocket_manager import websocket_manager
 from app.models import User
+from app.version import get_current_version
 
 # 导入路由
 from app.routers import auth, files, tasks, logs, env, packages, settings, notifications, api_debug, subscriptions
@@ -71,7 +72,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Pinchy",
     description="Python、Node.js脚本调度执行系统",
-    version="1.25.1",
+    version=get_current_version(),
     lifespan=lifespan
 )
 
