@@ -24,7 +24,8 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
 
 ### 1. Windows安装/运行
 
-1. 程序运行需要安装上述环境，如缺失环境请先下载并运行环境安装器Env_installer.exe，83.3MB，[123Pan](https://www.123865.com/s/OnXkjv-Le3BA) / [蓝奏]([https://wwqq.lanzoub.com/iP1FW2yzwwvc](https://wwqq.lanzoub.com/i0vJ02z1qbsj))
+1. 程序运行需要安装上述环境，如缺失环境请先安装
+<!--1. 程序运行需要安装上述环境，如缺失环境请先下载并运行环境安装器Env_installer.exe，83.3MB，[123Pan](https://www.123865.com/s/OnXkjv-Le3BA) / [蓝奏]([https://wwqq.lanzoub.com/iP1FW2yzwwvc](https://wwqq.lanzoub.com/i0vJ02z1qbsj))-->
 2. 在发行版页面下载含启动器的程序包[Pinchy_1.25.1_Win64_Launcher.zip](https://github.com/3ixi/Pinchy/releases)
 3. 解压下载的文件
 4. 运行pinchy-launcher.exe
