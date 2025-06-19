@@ -27,6 +27,9 @@ RUN mkdir -p logs scripts static
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHON_COMMAND=python3
+ENV NODEJS_COMMAND=node
+ENV NODE_PATH=/usr/local/lib/node_modules
+ENV NPM_CONFIG_PREFIX=/usr/local
 ENV SECRET_KEY=1b3c86abc6a54741b6f29d89d5148e42_pinchy
 
 EXPOSE 8000

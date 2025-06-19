@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  pinchy:
+    build: .
+    container_name: pinchy-app
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化数据目录
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./scripts:/app/scripts
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - NODE_PATH=/usr/local/lib/node_modules
+      - NPM_CONFIG_PREFIX=/usr/local
+      - NODEJS_COMMAND=node
+      - SECRET_KEY=1b3c86abc6a54741b6f29d89d5148e42_pinchy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

@@ -3,13 +3,29 @@
 """
 
 # 当前应用版本
-CURRENT_VERSION = "1.25.2"
+CURRENT_VERSION = "1.25.3"
 
 # 版本描述
 VERSION_DESCRIPTION = "Pinchy - Python、Node.js脚本调度执行系统"
 
 # 版本历史记录
 VERSION_HISTORY = {
+    "1.25.3": {
+        "release_date": "2025-06-19",
+        "description": "版本管理自动化和Docker环境Node.js依赖修复",
+        "features": [
+            "添加详细的版本历史记录管理",
+            "修复Docker环境下Node.js脚本依赖获取问题",
+            "优化Node.js脚本执行环境配置"
+        ],
+        "bug_fixes": [
+            "修复硬编码版本号问题",
+            "解决Docker环境下NODE_PATH未设置问题",
+            "修复Node.js脚本无法访问全局npm包问题",
+            "优化脚本执行工作目录配置",
+            "改进环境变量传递机制"
+        ]
+    },
     "1.25.2": {
         "release_date": "2025-06-18",
         "description": "包管理功能优化，Docker环境支持改进",

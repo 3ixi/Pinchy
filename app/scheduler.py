@@ -269,6 +269,39 @@ class TaskScheduler:
             env_vars['LANG'] = 'zh_CN.UTF-8'
             env_vars['LC_ALL'] = 'zh_CN.UTF-8'
 
+            # 设置Node.js相关环境变量（特别是在Docker环境下）
+            script_type = str(task.script_type)
+            if script_type == "nodejs":
+                # 确保Node.js能找到全局模块
+                if 'NODE_PATH' not in env_vars:
+                    # 尝试获取npm全局路径
+                    try:
+                        import subprocess
+                        import platform
+                        is_windows = platform.system().lower() == 'windows'
+
+                        result = subprocess.run(
+                            ["npm", "root", "-g"],
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                            shell=is_windows
+                        )
+                        if result.returncode == 0 and result.stdout.strip():
+                            env_vars['NODE_PATH'] = result.stdout.strip()
+                            print(f"✓ 设置NODE_PATH: {result.stdout.strip()}")
+                        else:
+                            # 使用默认路径
+                            default_node_path = "/usr/local/lib/node_modules"
+                            env_vars['NODE_PATH'] = default_node_path
+                            print(f"✓ 使用默认NODE_PATH: {default_node_path}")
+                    except Exception as e:
+                        print(f"⚠️ 获取NODE_PATH失败: {e}")
+                        # 使用默认路径
+                        default_node_path = "/usr/local/lib/node_modules"
+                        env_vars['NODE_PATH'] = default_node_path
+                        print(f"✓ 使用默认NODE_PATH: {default_node_path}")
+
             # 添加数据库中的环境变量
             db_env_vars = db.query(EnvironmentVariable).all()
             for env_var in db_env_vars:
@@ -292,13 +325,18 @@ class TaskScheduler:
                 if not os.path.exists(script_full_path):
                     raise FileNotFoundError(f"脚本文件不存在: {script_full_path}")
 
-                script_type = str(task.script_type)
                 if script_type == "python":
                     python_command = self.get_command_config(db, "python")
                     cmd = [python_command, script_full_path]
+                    # Python脚本在当前工作目录执行
+                    cwd = os.getcwd()
                 elif script_type == "nodejs":
                     nodejs_command = self.get_command_config(db, "nodejs")
                     cmd = [nodejs_command, script_full_path]
+                    # Node.js脚本在scripts目录下执行，这样可以更好地处理相对路径的依赖
+                    cwd = scripts_dir
+                    print(f"✓ Node.js脚本将在目录 {cwd} 下执行")
+                    print(f"✓ NODE_PATH: {env_vars.get('NODE_PATH', '未设置')}")
                 else:
                     raise ValueError(f"不支持的脚本类型: {script_type}")
 
@@ -350,13 +388,21 @@ class TaskScheduler:
                 env_vars['PYTHONUNBUFFERED'] = '1'
                 env_vars['PYTHONIOENCODING'] = 'utf-8'
 
+                # 确定工作目录
+                if script_type == "nodejs":
+                    # Node.js脚本在scripts目录下执行，便于处理相对路径依赖
+                    work_dir = scripts_dir
+                else:
+                    # Python脚本在应用根目录执行
+                    work_dir = os.getcwd()
+
                 # 启动进程
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     env=env_vars,
-                    cwd=scripts_dir,
+                    cwd=work_dir,
                     bufsize=0,  # 无缓冲
                     universal_newlines=False  # 使用字节模式
                 )
