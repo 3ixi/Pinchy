@@ -18,6 +18,7 @@ from app.auth import get_current_user, get_password_hash, verify_password
 from app.models import User, SystemVersion, SystemUUID, SystemConfig, TaskLog, NotificationConfig, EnvironmentVariable
 from app.security import security_manager
 from app.version import get_current_version, get_version_description, get_version_info, is_newer_version
+from app.timezone_utils import get_available_timezones, get_timezone_offset, validate_timezone, get_system_timezone, set_system_timezone
 
 router = APIRouter(prefix="/api/settings", tags=["系统设置"])
 
@@ -79,6 +80,7 @@ class SystemInfo(BaseModel):
     python_version: str
     nodejs_version: Optional[str]
     system_info: dict
+    timezone_info: dict
 
 class LogCleanupSettings(BaseModel):
     enabled: bool
@@ -93,13 +95,27 @@ class VersionCheckResponse(BaseModel):
     upgrade_info: Optional[str] = None
     created_at: Optional[str] = None  # 系统创建时间
 
+class TimezoneInfo(BaseModel):
+    name: str
+    display_name: str
+    offset: str
+
+class TimezoneConfigRequest(BaseModel):
+    timezone: str
+
+class TimezoneConfigResponse(BaseModel):
+    current_timezone: str
+    current_timezone_display: str
+    current_offset: str
+    available_timezones: list[TimezoneInfo]
+
 @router.get("/system-info", response_model=SystemInfo)
-async def get_system_info(current_user: User = Depends(get_current_user)):
+async def get_system_info(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """获取系统信息"""
     try:
         # 获取Python版本
         python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-        
+
         # 获取Node.js版本
         nodejs_version = None
         try:
@@ -112,7 +128,7 @@ async def get_system_info(current_user: User = Depends(get_current_user)):
             nodejs_version = result.stdout.strip()
         except (subprocess.CalledProcessError, FileNotFoundError):
             nodejs_version = "未安装或未找到"
-        
+
         # 获取系统信息
         import platform
         system_info = {
@@ -121,11 +137,24 @@ async def get_system_info(current_user: User = Depends(get_current_user)):
             "architecture": platform.machine(),
             "processor": platform.processor()
         }
-        
+
+        # 获取时区信息
+        from app.timezone_utils import get_current_time, format_datetime
+        current_timezone = get_system_timezone(db)
+        current_time = get_current_time(db)
+
+        timezone_info = {
+            "current_timezone": current_timezone,
+            "current_time": format_datetime(current_time, db, "%Y-%m-%d %H:%M:%S"),
+            "timezone_offset": get_timezone_offset(current_timezone),
+            "utc_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
         return SystemInfo(
             python_version=python_version,
             nodejs_version=nodejs_version,
-            system_info=system_info
+            system_info=system_info,
+            timezone_info=timezone_info
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取系统信息失败: {str(e)}")
@@ -1008,6 +1037,65 @@ async def test_package_manager(
             success=False,
             message=f"测试失败: {str(e)}"
         )
+
+@router.get("/timezone-config", response_model=TimezoneConfigResponse)
+async def get_timezone_config(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取时区配置"""
+    try:
+        # 获取当前时区
+        current_timezone = get_system_timezone(db)
+
+        # 获取可用时区列表
+        available_timezones = []
+        for tz_name, tz_display in get_available_timezones():
+            available_timezones.append(TimezoneInfo(
+                name=tz_name,
+                display_name=tz_display,
+                offset=get_timezone_offset(tz_name)
+            ))
+
+        # 获取当前时区的显示信息
+        current_display = next(
+            (tz.display_name for tz in available_timezones if tz.name == current_timezone),
+            current_timezone
+        )
+        current_offset = get_timezone_offset(current_timezone)
+
+        return TimezoneConfigResponse(
+            current_timezone=current_timezone,
+            current_timezone_display=current_display,
+            current_offset=current_offset,
+            available_timezones=available_timezones
+        )
+    except Exception as e:
+        print(f"获取时区配置失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取时区配置失败: {str(e)}")
+
+@router.post("/timezone-config")
+async def update_timezone_config(
+    config_data: TimezoneConfigRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """更新时区配置"""
+    try:
+        # 验证时区是否有效
+        if not validate_timezone(config_data.timezone):
+            raise HTTPException(status_code=400, detail="无效的时区名称")
+
+        # 保存时区配置
+        if set_system_timezone(db, config_data.timezone):
+            return {"message": "时区配置已更新", "timezone": config_data.timezone}
+        else:
+            raise HTTPException(status_code=400, detail="时区配置更新失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"更新时区配置失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"更新时区配置失败: {str(e)}")
 
 def init_system_version(db: Session):
     """初始化或更新系统版本"""

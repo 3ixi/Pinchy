@@ -12,6 +12,7 @@ from app.database import get_db
 from app.auth import get_current_user
 from app.models import User, TaskLog
 from app.websocket_manager import websocket_manager
+from app.timezone_utils import format_datetime
 
 router = APIRouter(prefix="/api/logs", tags=["日志管理"])
 
@@ -30,15 +31,15 @@ class TaskLogResponse(BaseModel):
         from_attributes = True
 
     @classmethod
-    def from_db_model(cls, log):
+    def from_db_model(cls, log, db=None):
         """从数据库模型创建响应对象"""
         return cls(
             id=log.id,
             task_id=log.task_id,
             task_name=log.task_name,
             status=log.status,
-            start_time=log.start_time.isoformat() if log.start_time else "",
-            end_time=log.end_time.isoformat() if log.end_time else None,
+            start_time=format_datetime(log.start_time, db) if log.start_time else "",
+            end_time=format_datetime(log.end_time, db) if log.end_time else None,
             output=log.output,
             error_output=log.error_output,
             exit_code=log.exit_code
@@ -83,7 +84,7 @@ async def get_logs(
     page = (offset // limit) + 1
     total_pages = (total + limit - 1) // limit
 
-    items = [TaskLogResponse.from_db_model(log) for log in logs]
+    items = [TaskLogResponse.from_db_model(log, db) for log in logs]
 
     return PaginatedLogsResponse(
         items=items,
@@ -104,7 +105,7 @@ async def get_log(
     if not log:
         raise HTTPException(status_code=404, detail="日志不存在")
     
-    return TaskLogResponse.from_db_model(log)
+    return TaskLogResponse.from_db_model(log, db)
 
 @router.delete("/{log_id}")
 async def delete_log(
@@ -172,7 +173,7 @@ async def get_running_task_log(
         raise HTTPException(status_code=404, detail="未找到正在运行的任务日志")
 
     # 创建响应对象并处理特殊的output字段
-    response = TaskLogResponse.from_db_model(log)
+    response = TaskLogResponse.from_db_model(log, db)
     if not response.output:
         response.output = "任务正在运行中..."
     return response

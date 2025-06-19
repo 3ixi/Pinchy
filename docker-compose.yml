@@ -17,6 +17,7 @@ services:
       - NODE_PATH=/usr/local/lib/node_modules
       - NPM_CONFIG_PREFIX=/usr/local
       - NODEJS_COMMAND=node
+      - TZ=Asia/Shanghai
       - SECRET_KEY=1b3c86abc6a54741b6f29d89d5148e42_pinchy
     restart: unless-stopped
     healthcheck:

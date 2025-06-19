@@ -9,6 +9,7 @@ from app.database import get_db
 from app.auth import get_current_user
 from app.models import User, Task
 from app.scheduler import task_scheduler
+from app.timezone_utils import format_datetime
 
 router = APIRouter(prefix="/api/tasks", tags=["任务管理"])
 
@@ -104,8 +105,8 @@ async def create_task(
         cron_expression=task.cron_expression,
         environment_vars=task.environment_vars,
         is_active=task.is_active,
-        created_at=task.created_at.isoformat(),
-        updated_at=task.updated_at.isoformat() if task.updated_at else None
+        created_at=format_datetime(task.created_at, db),
+        updated_at=format_datetime(task.updated_at, db) if task.updated_at else None
     )
 
 @router.get("/", response_model=List[TaskResponse])
@@ -125,8 +126,8 @@ async def get_tasks(
             cron_expression=task.cron_expression,
             environment_vars=task.environment_vars,
             is_active=task.is_active,
-            created_at=task.created_at.isoformat(),
-            updated_at=task.updated_at.isoformat() if task.updated_at else None
+            created_at=format_datetime(task.created_at, db),
+            updated_at=format_datetime(task.updated_at, db) if task.updated_at else None
         )
         for task in tasks
     ]
@@ -151,8 +152,8 @@ async def get_task(
         cron_expression=task.cron_expression,
         environment_vars=task.environment_vars,
         is_active=task.is_active,
-        created_at=task.created_at.isoformat(),
-        updated_at=task.updated_at.isoformat() if task.updated_at else None
+        created_at=format_datetime(task.created_at, db),
+        updated_at=format_datetime(task.updated_at, db) if task.updated_at else None
     )
 
 @router.put("/{task_id}", response_model=TaskResponse)
@@ -203,8 +204,8 @@ async def update_task(
         cron_expression=task.cron_expression,
         environment_vars=task.environment_vars,
         is_active=task.is_active,
-        created_at=task.created_at.isoformat(),
-        updated_at=task.updated_at.isoformat() if task.updated_at else None
+        created_at=format_datetime(task.created_at, db),
+        updated_at=format_datetime(task.updated_at, db) if task.updated_at else None
     )
 
 @router.delete("/{task_id}")

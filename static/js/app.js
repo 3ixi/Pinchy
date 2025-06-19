@@ -282,6 +282,12 @@ function app() {
         systemInfo: null,
         systemVersion: '',
         environmentCheck: null,
+
+        // 时区配置相关
+        timezoneConfig: null,
+        timezoneConfigLoading: false,
+        selectedTimezone: '',
+        timezoneUpdating: false,
         
         // 登录表单
         loginForm: {
@@ -2772,6 +2778,8 @@ function app() {
             this.systemInfoLoading = true;
             try {
                 this.systemInfo = await this.apiRequest('/api/settings/system-info');
+                // 同时加载时区配置
+                await this.loadTimezoneConfig();
             } catch (error) {
                 console.error('加载系统信息失败:', error);
             } finally {
@@ -4382,6 +4390,59 @@ function app() {
                 console.error('保存安全配置失败:', error);
             } finally {
                 this.securityConfigSaving = false;
+            }
+        },
+
+        // 时区配置相关方法
+        async loadTimezoneConfig() {
+            this.timezoneConfigLoading = true;
+            try {
+                this.timezoneConfig = await this.apiRequest('/api/settings/timezone-config');
+                // 设置当前选中的时区
+                if (this.timezoneConfig && this.timezoneConfig.current_timezone) {
+                    this.selectedTimezone = this.timezoneConfig.current_timezone;
+                }
+            } catch (error) {
+                console.error('加载时区配置失败:', error);
+                this.showToast('加载时区配置失败', 'error');
+            } finally {
+                this.timezoneConfigLoading = false;
+            }
+        },
+
+        async refreshTimezoneConfig() {
+            await this.loadTimezoneConfig();
+            // 同时刷新系统信息以获取最新时间
+            await this.loadSystemInfo();
+            this.showToast('时区配置已刷新', 'success');
+        },
+
+        async updateTimezone() {
+            if (!this.selectedTimezone) {
+                this.showToast('请选择时区', 'warning');
+                return;
+            }
+
+            this.timezoneUpdating = true;
+            try {
+                await this.apiRequest('/api/settings/timezone-config', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        timezone: this.selectedTimezone
+                    })
+                });
+
+                this.showToast('时区设置已更新', 'success');
+
+                // 重新加载时区配置和系统信息
+                await this.loadTimezoneConfig();
+                await this.loadSystemInfo();
+
+            } catch (error) {
+                console.error('更新时区设置失败:', error);
+                this.showToast('更新时区设置失败: ' + (error.message || '未知错误'), 'error');
+            } finally {
+                this.timezoneUpdating = false;
             }
         }
     };

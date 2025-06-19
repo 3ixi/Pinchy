@@ -11,6 +11,7 @@ from app.database import SessionLocal
 from app.models import Task, TaskLog, EnvironmentVariable, ApiDebugConfig, ApiDebugLog, NotificationConfig, ScriptSubscription, SystemConfig
 from app.websocket_manager import websocket_manager
 from app.notification_service import notification_service
+from app.timezone_utils import get_current_time
 
 class TaskScheduler:
     """任务调度器类"""
@@ -240,7 +241,7 @@ class TaskScheduler:
                 task_id=task.id,
                 task_name=task.name,
                 status="running",
-                start_time=datetime.now()
+                start_time=get_current_time(db)
             )
             db.add(task_log)
             db.commit()
@@ -250,7 +251,7 @@ class TaskScheduler:
                 "log_id": task_log.id,
                 "output_lines": [],
                 "error_lines": [],
-                "start_time": datetime.now()
+                "start_time": get_current_time(db)
             }
 
             # 发送WebSocket消息到全局房间
@@ -454,7 +455,7 @@ class TaskScheduler:
 
                 # 更新最终状态
                 db.query(TaskLog).filter(TaskLog.id == task_log.id).update({
-                    "end_time": datetime.now(),
+                    "end_time": get_current_time(db),
                     "exit_code": process.returncode,
                     "output": ''.join(output_lines),
                     "error_output": ''.join(error_lines),
@@ -486,7 +487,7 @@ class TaskScheduler:
             except Exception as e:
                 # 执行出错
                 db.query(TaskLog).filter(TaskLog.id == task_log.id).update({
-                    "end_time": datetime.now(),
+                    "end_time": get_current_time(db),
                     "status": "failed",
                     "error_output": str(e)
                 })
