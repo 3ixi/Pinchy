@@ -77,8 +77,33 @@ def format_datetime(dt: datetime, db: Session = None, format_str: str = "%Y-%m-%
     """格式化日期时间为本地时区字符串"""
     if dt is None:
         return ""
-    
-    local_dt = utc_to_local(dt, db)
+
+    if db is None:
+        # 如果没有数据库连接，使用默认时区
+        tz = pytz.timezone("Asia/Shanghai")
+    else:
+        timezone_name = get_system_timezone(db)
+        tz = pytz.timezone(timezone_name)
+
+    # 判断输入时间的类型并进行相应处理
+    if dt.tzinfo is None:
+        # 无时区信息的情况：
+        # 对于从数据库读取的时间，由于SQLite不支持时区，我们假设它已经是本地时区时间
+        # 这是因为我们在存储时使用的是get_current_time(db)，它返回的是本地时区时间
+        # 但存储到SQLite后时区信息丢失了
+        local_dt = dt  # 直接使用，不进行时区转换
+    elif dt.tzinfo == timezone.utc:
+        # UTC时间，转换为本地时区
+        local_dt = dt.astimezone(tz)
+    else:
+        # 已经有时区信息，检查是否已经是目标时区
+        if str(dt.tzinfo) == str(tz):
+            # 已经是目标时区，直接使用
+            local_dt = dt
+        else:
+            # 转换为目标时区
+            local_dt = dt.astimezone(tz)
+
     return local_dt.strftime(format_str)
 
 def get_available_timezones():

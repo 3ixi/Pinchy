@@ -979,6 +979,17 @@ function app() {
         
         // 格式化日期时间
         formatDateTime(dateString) {
+            // 如果后端已经返回了格式化的时间字符串（不包含T或Z），直接使用
+            if (typeof dateString === 'string' &&
+                dateString.match(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)) {
+                // 后端已经格式化为本地时区时间，直接转换显示格式
+                const [datePart, timePart] = dateString.split(' ');
+                const [year, month, day] = datePart.split('-');
+                const [hours, minutes, seconds] = timePart.split(':');
+                return `${parseInt(month)}月${parseInt(day)}日 ${hours}:${minutes}:${seconds}`;
+            }
+
+            // 对于ISO格式的时间字符串，按原来的方式处理
             const date = new Date(dateString);
             const month = date.getMonth() + 1;
             const day = date.getDate();

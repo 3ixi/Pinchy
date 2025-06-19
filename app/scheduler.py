@@ -589,7 +589,7 @@ class TaskScheduler:
                     if task_log:
                         from datetime import datetime
                         db.query(TaskLog).filter(TaskLog.id == task_log.id).update({
-                            "end_time": datetime.now(),
+                            "end_time": get_current_time(db),
                             "status": "stopped",
                             "error_output": "任务被用户停止"
                         })
@@ -650,7 +650,7 @@ class TaskScheduler:
                 print(f"接口调试配置不存在: {config_id}")
                 return
 
-            start_time = datetime.now()
+            start_time = get_current_time(db)
 
             # 获取环境变量
             env_vars = {}
@@ -755,7 +755,7 @@ class TaskScheduler:
                         timeout=30
                     )
 
-                end_time = datetime.now()
+                end_time = get_current_time(db)
                 response_time = int((end_time - start_time).total_seconds() * 1000)
 
                 # 创建执行日志
@@ -830,7 +830,7 @@ class TaskScheduler:
                             print(f"发送通知失败: {str(e)}")
 
             except Exception as e:
-                end_time = datetime.now()
+                end_time = get_current_time(db)
                 response_time = int((end_time - start_time).total_seconds() * 1000)
 
                 # 创建错误日志
