@@ -329,21 +329,17 @@ class TaskScheduler:
                 if script_type == "python":
                     python_command = self.get_command_config(db, "python")
                     cmd = [python_command, script_full_path]
-                    # Python脚本在当前工作目录执行
-                    cwd = os.getcwd()
                 elif script_type == "nodejs":
                     nodejs_command = self.get_command_config(db, "nodejs")
                     cmd = [nodejs_command, script_full_path]
-                    # Node.js脚本在scripts目录下执行，这样可以更好地处理相对路径的依赖
-                    cwd = scripts_dir
-                    print(f"✓ Node.js脚本将在目录 {cwd} 下执行")
+                    print(f"✓ Node.js脚本将在目录 {scripts_dir} 下执行")
                     print(f"✓ NODE_PATH: {env_vars.get('NODE_PATH', '未设置')}")
                 else:
                     raise ValueError(f"不支持的脚本类型: {script_type}")
 
                 print(f"执行命令: {' '.join(cmd)}")
 
-                # 执行命令，工作目录设置为scripts目录
+                # 执行命令，工作目录统一设置为scripts目录
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
@@ -390,12 +386,8 @@ class TaskScheduler:
                 env_vars['PYTHONIOENCODING'] = 'utf-8'
 
                 # 确定工作目录
-                if script_type == "nodejs":
-                    # Node.js脚本在scripts目录下执行，便于处理相对路径依赖
-                    work_dir = scripts_dir
-                else:
-                    # Python脚本在应用根目录执行
-                    work_dir = os.getcwd()
+                # 所有脚本都在scripts目录下执行，保持与定时任务执行的一致性
+                work_dir = scripts_dir
 
                 # 启动进程
                 process = subprocess.Popen(

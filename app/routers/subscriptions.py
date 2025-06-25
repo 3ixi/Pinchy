@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import asyncio
 import fnmatch
+import re
 from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -39,6 +40,7 @@ class SubscriptionCreate(BaseModel):
     cron_expression: str
     notification_enabled: bool = False
     notification_type: Optional[str] = None
+    auto_create_tasks: bool = False
 
 class SubscriptionUpdate(BaseModel):
     name: Optional[str] = None
@@ -54,6 +56,7 @@ class SubscriptionUpdate(BaseModel):
     cron_expression: Optional[str] = None
     notification_enabled: Optional[bool] = None
     notification_type: Optional[str] = None
+    auto_create_tasks: Optional[bool] = None
     is_active: Optional[bool] = None
 
 class SubscriptionResponse(BaseModel):
@@ -71,6 +74,7 @@ class SubscriptionResponse(BaseModel):
     cron_expression: str
     notification_enabled: bool
     notification_type: Optional[str]
+    auto_create_tasks: bool
     is_active: bool
     last_sync_time: Optional[datetime]
     created_at: datetime
@@ -95,6 +99,72 @@ class SubscriptionLogResponse(BaseModel):
 
 # 全局代理配置缓存
 proxy_config = ProxyConfig()
+
+def extract_module_docstring(file_path: str) -> Optional[str]:
+    """提取Python脚本的模块级文档字符串"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # 使用正则表达式匹配模块级别的三引号文档字符串
+        # 匹配模式：开头是可选的空白和注释，然后是三引号，接着是内容，最后是结束的三引号
+        pattern = r'^(?:\s*#.*?\n)*\s*"""(.*?)"""'
+        match = re.search(pattern, content, re.DOTALL)
+
+        if match:
+            # 返回匹配到的文档字符串内容，去除前后空白
+            return match.group(1).strip()
+        return None
+    except Exception as e:
+        print(f"提取文档字符串失败 {file_path}: {str(e)}")
+        return None
+
+def format_docstring_for_notification(docstring: str, max_length: int = 500) -> str:
+    """格式化文档字符串用于通知显示"""
+    if not docstring:
+        return ""
+
+    # 如果文档字符串太长，截断并添加省略号
+    if len(docstring) > max_length:
+        # 尝试在合适的位置截断（如换行符或句号）
+        truncated = docstring[:max_length]
+        last_newline = truncated.rfind('\n')
+        last_period = truncated.rfind('。')
+        last_dot = truncated.rfind('.')
+
+        # 选择最合适的截断位置
+        cut_pos = max(last_newline, last_period, last_dot)
+        if cut_pos > max_length * 0.8:  # 如果截断位置不会丢失太多内容
+            docstring = docstring[:cut_pos + 1] + "..."
+        else:
+            docstring = truncated + "..."
+
+    # 保持原有的换行格式，但限制每行长度
+    lines = docstring.split('\n')
+    formatted_lines = []
+    for line in lines:
+        line = line.strip()
+        if line:
+            # 如果单行太长，进行换行
+            if len(line) > 80:
+                words = line.split(' ')
+                current_line = ""
+                for word in words:
+                    if len(current_line + word) > 80:
+                        if current_line:
+                            formatted_lines.append(current_line.strip())
+                            current_line = word + " "
+                        else:
+                            formatted_lines.append(word)
+                            current_line = ""
+                    else:
+                        current_line += word + " "
+                if current_line.strip():
+                    formatted_lines.append(current_line.strip())
+            else:
+                formatted_lines.append(line)
+
+    return '\n    '.join(formatted_lines)
 
 def load_proxy_config_from_db(db: Session) -> ProxyConfig:
     """从数据库加载代理配置"""
@@ -153,6 +223,7 @@ async def get_subscriptions(
             "cron_expression": subscription.cron_expression,
             "notification_enabled": subscription.notification_enabled,
             "notification_type": subscription.notification_type,
+            "auto_create_tasks": getattr(subscription, 'auto_create_tasks', False),
             "is_active": subscription.is_active,
             "last_sync_time": subscription.last_sync_time,
             "created_at": subscription.created_at,
@@ -367,7 +438,10 @@ async def execute_subscription_sync(subscription_id: int, db: Session = None):
 
             # 发送通知
             if subscription.notification_enabled and (updated_files or new_files or deleted_files):
-                await send_subscription_notification(subscription, updated_files, new_files, deleted_files, db)
+                # 构建repo_dir路径
+                scripts_dir = os.path.abspath("scripts")
+                repo_dir = os.path.join(scripts_dir, subscription.save_directory)
+                await send_subscription_notification(subscription, updated_files, new_files, deleted_files, db, repo_dir)
 
         except Exception as e:
             log.status = "error"
@@ -651,7 +725,72 @@ def scan_file_changes(subscription: ScriptSubscription, repo_dir: str, db: Sessi
                 db.delete(file_record)
 
     db.commit()
+
+    # 如果启用了自动创建任务，处理新增的脚本文件
+    if getattr(subscription, 'auto_create_tasks', False):
+        auto_create_tasks_for_scripts(subscription, new_files, repo_dir, db)
+
     return updated_files, new_files, deleted_files
+
+def auto_create_tasks_for_scripts(subscription: ScriptSubscription, new_files: List[str], repo_dir: str, db: Session):
+    """为新增的Python和JavaScript脚本自动创建任务"""
+    from app.models import Task
+
+    for file_path in new_files:
+        # 处理Python和JavaScript脚本
+        script_type = None
+        if file_path.endswith('.py'):
+            script_type = "python"
+        elif file_path.endswith('.js'):
+            script_type = "nodejs"
+        else:
+            continue  # 跳过其他类型的文件
+
+        # 构建脚本路径（相对于scripts目录）
+        # 由于任务执行时工作目录已经是scripts目录，所以这里不需要包含"scripts"前缀
+        full_script_path = os.path.join(str(subscription.save_directory), file_path)
+        absolute_script_path = os.path.join(repo_dir, file_path)
+
+        # 检查文件是否存在
+        if not os.path.exists(absolute_script_path):
+            continue
+
+        # 提取文件名作为任务名（去掉扩展名）
+        script_name = os.path.splitext(os.path.basename(file_path))[0]
+        task_name = f"{subscription.name}_{script_name}"
+
+        # 检查任务名是否已存在
+        existing_task = db.query(Task).filter(Task.name == task_name).first()
+        if existing_task:
+            print(f"任务 {task_name} 已存在，跳过创建")
+            continue
+
+        # 创建新任务
+        try:
+            new_task = Task(
+                name=task_name,
+                description=f"由订阅 {subscription.name} 自动创建的{script_type}任务",
+                script_path=full_script_path,
+                script_type=script_type,
+                cron_expression="0 3 * * *",  # 每天凌晨3点执行
+                environment_vars={},
+                group_name=f"订阅_{subscription.name}",
+                is_active=True
+            )
+
+            db.add(new_task)
+            db.commit()
+            db.refresh(new_task)
+
+            # 添加到调度器
+            from app.scheduler import task_scheduler
+            task_scheduler.add_task(new_task)
+
+            print(f"自动创建{script_type}任务成功: {task_name}")
+
+        except Exception as e:
+            print(f"自动创建任务失败 {task_name}: {str(e)}")
+            db.rollback()
 
 def calculate_file_md5(file_path: str) -> str:
     """计算文件MD5值"""
@@ -661,7 +800,7 @@ def calculate_file_md5(file_path: str) -> str:
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-async def send_subscription_notification(subscription: ScriptSubscription, updated_files: List[str], new_files: List[str], deleted_files: List[str], db: Session):
+async def send_subscription_notification(subscription: ScriptSubscription, updated_files: List[str], new_files: List[str], deleted_files: List[str], db: Session, repo_dir: str = None):
     """发送订阅通知"""
     notification_type = getattr(subscription, 'notification_type', None)
     if not notification_type:
@@ -684,6 +823,17 @@ async def send_subscription_notification(subscription: ScriptSubscription, updat
         content_lines.append(f"\n新增文件 ({len(new_files)} 个):")
         for file in new_files[:10]:  # 最多显示10个
             content_lines.append(f"  + {file}")
+
+            # 如果是Python脚本且提供了repo_dir，尝试提取文档字符串
+            if file.endswith('.py') and repo_dir:
+                script_path = os.path.join(repo_dir, file)
+                docstring = extract_module_docstring(script_path)
+                if docstring:
+                    # 格式化文档字符串，限制长度并保持格式
+                    formatted_docstring = format_docstring_for_notification(docstring)
+                    content_lines.append(f"    📝 脚本说明:")
+                    content_lines.append(f"    {formatted_docstring}")
+
         if len(new_files) > 10:
             content_lines.append(f"  ... 还有 {len(new_files) - 10} 个文件")
 
@@ -691,6 +841,17 @@ async def send_subscription_notification(subscription: ScriptSubscription, updat
         content_lines.append(f"\n更新文件 ({len(updated_files)} 个):")
         for file in updated_files[:10]:  # 最多显示10个
             content_lines.append(f"  * {file}")
+
+            # 如果是Python脚本且提供了repo_dir，尝试提取文档字符串
+            if file.endswith('.py') and repo_dir:
+                script_path = os.path.join(repo_dir, file)
+                docstring = extract_module_docstring(script_path)
+                if docstring:
+                    # 格式化文档字符串，限制长度并保持格式
+                    formatted_docstring = format_docstring_for_notification(docstring)
+                    content_lines.append(f"    📝 脚本说明:")
+                    content_lines.append(f"    {formatted_docstring}")
+
         if len(updated_files) > 10:
             content_lines.append(f"  ... 还有 {len(updated_files) - 10} 个文件")
 

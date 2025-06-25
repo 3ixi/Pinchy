@@ -19,7 +19,7 @@ class User(Base):
 class Task(Base):
     """任务表"""
     __tablename__ = "tasks"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
     description = Column(Text)
@@ -27,6 +27,7 @@ class Task(Base):
     script_type = Column(String(20), nullable=False)  # python 或 nodejs
     cron_expression = Column(String(100), nullable=False)
     environment_vars = Column(JSON, default={})  # 环境变量
+    group_name = Column(String(50), nullable=False, default="默认")  # 任务分组
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -176,6 +177,7 @@ class ScriptSubscription(Base):
     cron_expression = Column(String(100), nullable=False)  # 定时表达式
     notification_enabled = Column(Boolean, default=False)  # 是否启用通知
     notification_type = Column(String(50))  # 通知类型
+    auto_create_tasks = Column(Boolean, default=False)  # 是否自动创建任务
     is_active = Column(Boolean, default=True)  # 是否启用
     last_sync_time = Column(DateTime(timezone=True))  # 最后同步时间
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -69,7 +69,8 @@ function app() {
             sync_delete_removed_files: false,
             cron_expression: '0 0 * * *',
             notification_enabled: false,
-            notification_type: ''
+            notification_type: '',
+            auto_create_tasks: false
         },
         subscriptionLogs: [],
         subscriptionLogsLoading: false,
@@ -155,7 +156,8 @@ function app() {
             script_path: '',
             script_type: 'python',
             cron_expression: '',
-            environment_vars: {}
+            environment_vars: {},
+            group_name: '默认'
         },
         envForm: {
             key: '',
@@ -186,6 +188,29 @@ function app() {
         taskExecutions: {}, // 任务执行记录，key为task_id
         runningTasks: new Set(), // 正在运行的任务ID集合
         manualRunTasks: new Set(), // 手动运行的任务ID集合
+
+        // 任务分组和分页相关
+        taskGroups: [],
+        currentTaskGroup: null, // 当前选中的分组
+        newGroupName: '', // 新分组名称输入
+        taskPagination: {
+            page: 1,
+            pageSize: 30,
+            total: 0,
+            totalPages: 0
+        },
+
+        // 分组管理相关
+        showGroupRenameModal: false,
+        showGroupDeleteModal: false,
+        groupRenameForm: {
+            oldName: '',
+            newName: ''
+        },
+        groupDeleteForm: {
+            groupName: ''
+        },
+        activeGroupDropdown: null, // 当前激活的下拉菜单
         files: [],
         logs: [],
         envVars: [],
@@ -238,6 +263,13 @@ function app() {
             enabled: false,
             retentionDays: 7
         },
+
+        // 备份与恢复相关
+        backupExporting: false,
+        backupImporting: false,
+        backupResult: null,
+        importResult: null,
+        selectedBackupFile: null,
         packageTab: 'python',
         packageManagerConfig: null,
 
@@ -890,24 +922,24 @@ function app() {
         // 加载统计数据
         async loadStats() {
             try {
-                const [tasksResponse, logsResponse] = await Promise.all([
-                    fetch('/api/tasks/'),
+                const [tasksStatsResponse, logsResponse] = await Promise.all([
+                    fetch('/api/tasks/stats'),
                     fetch('/api/logs/stats/summary')
                 ]);
-                
-                if (tasksResponse.ok) {
-                    const tasks = await tasksResponse.json();
-                    this.stats.totalTasks = tasks.length;
-                    this.stats.activeTasks = tasks.filter(t => t.is_active).length;
+
+                if (tasksStatsResponse.ok) {
+                    const tasksStats = await tasksStatsResponse.json();
+                    this.stats.totalTasks = tasksStats.total_tasks || 0;
+                    this.stats.activeTasks = tasksStats.active_tasks || 0;
                 }
-                
+
                 if (logsResponse.ok) {
                     const logStats = await logsResponse.json();
                     this.stats.todayExecutions = logStats.total;
                     this.stats.failedTasks = logStats.failed;
                 }
             } catch (error) {
-                console.error('加载统计数据失败:', error);
+                console.error('加载任务统计数据失败:', error);
             }
         },
         
@@ -1050,17 +1082,156 @@ function app() {
         },
 
         // 任务管理方法
-        async loadTasks() {
+        async loadTasks(page = 1) {
             this.tasksLoading = true;
             try {
-                this.tasks = await this.apiRequest('/api/tasks/');
+                // 构建查询参数
+                const params = new URLSearchParams({
+                    page: page,
+                    page_size: this.taskPagination.pageSize
+                });
+
+                // 如果选择了特定分组，添加分组过滤
+                if (this.currentTaskGroup && this.currentTaskGroup !== 'all') {
+                    params.append('group_name', this.currentTaskGroup);
+                }
+
+                const response = await this.apiRequest(`/api/tasks/?${params}`);
+                this.tasks = response.tasks;
+                this.taskPagination = {
+                    page: response.page,
+                    pageSize: response.page_size,
+                    total: response.total,
+                    totalPages: response.total_pages
+                };
+
                 // 加载每个任务的最近执行记录
                 await this.loadTaskExecutions();
             } catch (error) {
                 console.error('加载任务失败:', error);
                 this.tasks = [];
+                this.taskPagination = {
+                    page: 1,
+                    pageSize: 30,
+                    total: 0,
+                    totalPages: 0
+                };
             } finally {
                 this.tasksLoading = false;
+            }
+        },
+
+        async loadTaskGroups() {
+            try {
+                const response = await this.apiRequest('/api/tasks/groups');
+                this.taskGroups = response.groups;
+
+                // 如果没有选择分组，默认选择"全部"
+                if (!this.currentTaskGroup) {
+                    this.currentTaskGroup = 'all';
+                }
+            } catch (error) {
+                console.error('加载任务分组失败:', error);
+                this.taskGroups = ['默认'];
+            }
+        },
+
+        async switchTaskGroup(groupName) {
+            this.currentTaskGroup = groupName;
+            this.taskPagination.page = 1; // 重置到第一页
+            await this.loadTasks(1);
+        },
+
+        async goToTaskPage(page) {
+            if (page >= 1 && page <= this.taskPagination.totalPages) {
+                await this.loadTasks(page);
+            }
+        },
+
+        // 分组管理方法
+        toggleGroupDropdown(groupName) {
+            if (this.activeGroupDropdown === groupName) {
+                this.activeGroupDropdown = null;
+            } else {
+                this.activeGroupDropdown = groupName;
+            }
+        },
+
+        closeGroupDropdown() {
+            this.activeGroupDropdown = null;
+        },
+
+        showRenameGroupModal(groupName) {
+            this.groupRenameForm.oldName = groupName;
+            this.groupRenameForm.newName = groupName;
+            this.showGroupRenameModal = true;
+            this.closeGroupDropdown();
+        },
+
+        showDeleteGroupModal(groupName) {
+            this.groupDeleteForm.groupName = groupName;
+            this.showGroupDeleteModal = true;
+            this.closeGroupDropdown();
+        },
+
+        async renameGroup() {
+            if (!this.groupRenameForm.newName.trim()) {
+                this.showToast('请输入新的分组名称', 'error');
+                return;
+            }
+
+            if (this.groupRenameForm.oldName === this.groupRenameForm.newName.trim()) {
+                this.showToast('新分组名称与原名称相同', 'error');
+                return;
+            }
+
+            try {
+                await this.apiRequest('/api/tasks/groups/rename', {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        old_name: this.groupRenameForm.oldName,
+                        new_name: this.groupRenameForm.newName.trim()
+                    })
+                });
+
+                this.showToast('分组重命名成功', 'success');
+                this.showGroupRenameModal = false;
+
+                // 如果当前选中的是被重命名的分组，更新当前分组
+                if (this.currentTaskGroup === this.groupRenameForm.oldName) {
+                    this.currentTaskGroup = this.groupRenameForm.newName.trim();
+                }
+
+                // 重新加载分组和任务
+                await this.loadTaskGroups();
+                await this.loadTasks();
+            } catch (error) {
+                console.error('重命名分组失败:', error);
+            }
+        },
+
+        async deleteGroup() {
+            try {
+                await this.apiRequest('/api/tasks/groups/delete', {
+                    method: 'DELETE',
+                    body: JSON.stringify({
+                        group_name: this.groupDeleteForm.groupName
+                    })
+                });
+
+                this.showToast('分组删除成功', 'success');
+                this.showGroupDeleteModal = false;
+
+                // 如果当前选中的是被删除的分组，切换到"全部"
+                if (this.currentTaskGroup === this.groupDeleteForm.groupName) {
+                    this.currentTaskGroup = 'all';
+                }
+
+                // 重新加载分组和任务
+                await this.loadTaskGroups();
+                await this.loadTasks();
+            } catch (error) {
+                console.error('删除分组失败:', error);
             }
         },
 
@@ -1097,7 +1268,8 @@ function app() {
                 script_path: '',
                 script_type: 'python',
                 cron_expression: '',
-                environment_vars: {}
+                environment_vars: {},
+                group_name: '默认'
             };
         },
 
@@ -2108,12 +2280,50 @@ function app() {
             }
         },
 
+        // 通用复制到剪贴板函数，支持降级方案
+        copyToClipboard(text, successMessage = '已复制到剪贴板') {
+            // 检查是否支持现代的 Clipboard API
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => {
+                    this.showToast(successMessage, 'success');
+                }).catch(() => {
+                    // 如果现代API失败，使用降级方案
+                    this.fallbackCopyToClipboard(text, successMessage);
+                });
+            } else {
+                // 直接使用降级方案
+                this.fallbackCopyToClipboard(text, successMessage);
+            }
+        },
+
+        // 降级复制方案，使用传统的 document.execCommand
+        fallbackCopyToClipboard(text, successMessage) {
+            try {
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                textArea.style.top = '-999999px';
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+
+                const successful = document.execCommand('copy');
+                document.body.removeChild(textArea);
+
+                if (successful) {
+                    this.showToast(successMessage, 'success');
+                } else {
+                    this.showToast('复制失败，请手动复制', 'error');
+                }
+            } catch (err) {
+                console.error('复制失败:', err);
+                this.showToast('复制失败，请手动复制', 'error');
+            }
+        },
+
         copyFilePath(path) {
-            navigator.clipboard.writeText(path).then(() => {
-                this.showToast('文件路径已复制到剪贴板', 'success');
-            }).catch(() => {
-                this.showToast('复制失败', 'error');
-            });
+            this.copyToClipboard(path, '文件路径已复制到剪贴板');
         },
 
         startRename(file) {
@@ -2214,11 +2424,7 @@ function app() {
         },
 
         copyEnvValue(value) {
-            navigator.clipboard.writeText(value).then(() => {
-                this.showToast('环境变量值已复制到剪贴板', 'success');
-            }).catch(() => {
-                this.showToast('复制失败', 'error');
-            });
+            this.copyToClipboard(value, '环境变量值已复制到剪贴板');
         },
 
         // 日志管理方法
@@ -2914,6 +3120,7 @@ function app() {
             switch (page) {
                 case 'tasks':
                     if (!this.dataLoaded.tasks) {
+                        await this.loadTaskGroups();
                         await this.loadTasks();
                         this.dataLoaded.tasks = true;
                     }
@@ -2978,6 +3185,8 @@ function app() {
                         await this.loadNotificationConfigs();
                         this.dataLoaded.notifications = true;
                     }
+                    // 加载代理配置，用于判断是否可以启用代理选项
+                    await this.loadProxyConfig();
                     break;
                 case 'settings':
                     if (!this.dataLoaded.systemInfo) {
@@ -3549,18 +3758,7 @@ function app() {
 
         copyDownloadUrl() {
             if (this.versionInfo.download_url) {
-                navigator.clipboard.writeText(this.versionInfo.download_url).then(() => {
-                    this.showToast('下载链接已复制到剪贴板', 'success');
-                }).catch(() => {
-                    // 降级方案：创建临时文本框
-                    const textArea = document.createElement('textarea');
-                    textArea.value = this.versionInfo.download_url;
-                    document.body.appendChild(textArea);
-                    textArea.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(textArea);
-                    this.showToast('下载链接已复制到剪贴板', 'success');
-                });
+                this.copyToClipboard(this.versionInfo.download_url, '下载链接已复制到剪贴板');
             }
         },
 
@@ -3936,18 +4134,7 @@ function app() {
         },
 
         copyVariableName(variableName) {
-            navigator.clipboard.writeText(variableName).then(() => {
-                this.showToast('变量名已复制', 'success');
-            }).catch(() => {
-                // 降级方案
-                const textArea = document.createElement('textarea');
-                textArea.value = variableName;
-                document.body.appendChild(textArea);
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-                this.showToast('变量名已复制', 'success');
-            });
+            this.copyToClipboard(variableName, '变量名已复制');
         },
 
         // 将快速调试配置保存为配置
@@ -4064,7 +4251,8 @@ function app() {
                     sync_delete_removed_files: subscription.sync_delete_removed_files || false,
                     cron_expression: subscription.cron_expression,
                     notification_enabled: subscription.notification_enabled,
-                    notification_type: subscription.notification_type || ''
+                    notification_type: subscription.notification_type || '',
+                    auto_create_tasks: subscription.auto_create_tasks || false
                 };
             } else {
                 this.subscriptionForm = {
@@ -4080,7 +4268,8 @@ function app() {
                     sync_delete_removed_files: false,
                     cron_expression: '0 0 * * *',
                     notification_enabled: false,
-                    notification_type: ''
+                    notification_type: '',
+                    auto_create_tasks: false
                 };
             }
             this.showSubscriptionModal = true;
@@ -4360,7 +4549,7 @@ function app() {
 
         // 检查代理是否可用（用于禁用使用代理选项）
         isProxyAvailable() {
-            return this.proxyConfig.enabled && this.proxyConfig.host && this.proxyConfig.port;
+            return this.proxyConfig.enabled;
         },
 
         // 安全配置相关方法
@@ -4455,6 +4644,100 @@ function app() {
             } finally {
                 this.timezoneUpdating = false;
             }
+        },
+
+        // 备份与恢复相关方法
+        async exportBackup() {
+            this.backupExporting = true;
+            this.backupResult = null;
+
+            try {
+                const response = await this.apiRequest('/api/settings/export-backup', {
+                    method: 'POST'
+                });
+
+                this.backupResult = response;
+                this.showToast('备份创建成功', 'success');
+            } catch (error) {
+                console.error('导出备份失败:', error);
+                this.showToast('导出备份失败: ' + (error.message || '未知错误'), 'error');
+            } finally {
+                this.backupExporting = false;
+            }
+        },
+
+        handleBackupFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                if (!file.name.endsWith('.pb')) {
+                    this.showToast('请选择.pb格式的备份文件', 'error');
+                    event.target.value = '';
+                    this.selectedBackupFile = null;
+                    return;
+                }
+                this.selectedBackupFile = file;
+                this.importResult = null;
+            } else {
+                this.selectedBackupFile = null;
+            }
+        },
+
+        async importBackup() {
+            if (!this.selectedBackupFile) {
+                this.showToast('请先选择备份文件', 'error');
+                return;
+            }
+
+            // 确认操作
+            if (!confirm('确定要导入备份吗？此操作将覆盖现有数据，建议先创建当前系统的备份。\n\n导入完成后系统将自动注销，需要重新登录。')) {
+                return;
+            }
+
+            this.backupImporting = true;
+            this.importResult = null;
+
+            try {
+                const formData = new FormData();
+                formData.append('backup_file', this.selectedBackupFile);
+
+                const response = await fetch('/api/settings/import-backup', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.token}`
+                    },
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || '导入失败');
+                }
+
+                const result = await response.json();
+                this.importResult = result;
+                this.showToast('备份导入成功，系统将在3秒后自动注销', 'success');
+
+                // 3秒后自动注销
+                setTimeout(() => {
+                    this.logout();
+                }, 3000);
+
+            } catch (error) {
+                console.error('导入备份失败:', error);
+                this.showToast('导入备份失败: ' + (error.message || '未知错误'), 'error');
+            } finally {
+                this.backupImporting = false;
+            }
+        },
+
+        formatFileSize(bytes) {
+            if (!bytes) return '0 B';
+
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
     };
 }

@@ -8,10 +8,17 @@ import requests
 import ssl
 import uuid
 import json
+import os
+import tarfile
+import tempfile
+import shutil
+import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from pydantic import BaseModel
 from app.database import get_db
 from app.auth import get_current_user, get_password_hash, verify_password
@@ -108,6 +115,16 @@ class TimezoneConfigResponse(BaseModel):
     current_timezone_display: str
     current_offset: str
     available_timezones: list[TimezoneInfo]
+
+class BackupResponse(BaseModel):
+    message: str
+    filename: str
+    size: int
+
+class RestoreResponse(BaseModel):
+    message: str
+    files_restored: int
+    tables_restored: int
 
 @router.get("/system-info", response_model=SystemInfo)
 async def get_system_info(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1166,3 +1183,289 @@ def init_system_uuid(db: Session):
         print(f"已初始化系统UUID: {new_uuid}")
     else:
         print(f"系统UUID已存在: {system_uuid.uuid}")
+
+@router.post("/export-backup", response_model=BackupResponse)
+async def export_backup(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """导出系统备份"""
+    try:
+        # 创建临时目录
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_dir = os.path.join(temp_dir, "backup")
+            os.makedirs(backup_dir, exist_ok=True)
+
+            # 1. 备份scripts目录
+            scripts_dir = "scripts"
+            if os.path.exists(scripts_dir):
+                backup_scripts_dir = os.path.join(backup_dir, "scripts")
+                shutil.copytree(scripts_dir, backup_scripts_dir)
+                print(f"✅ 已备份scripts目录")
+
+            # 2. 备份数据库（排除system_version表）
+            db_backup_path = os.path.join(backup_dir, "database.sql")
+            await backup_database(db, db_backup_path)
+            print(f"✅ 已备份数据库")
+
+            # 3. 创建.pb文件（实际是tar压缩包）
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_filename = f"pinchy_backup_{timestamp}.pb"
+            backup_path = os.path.join(temp_dir, backup_filename)
+
+            with tarfile.open(backup_path, "w:gz") as tar:
+                tar.add(backup_dir, arcname=".")
+
+            # 获取文件大小
+            file_size = os.path.getsize(backup_path)
+
+            # 移动到静态文件目录供下载
+            static_backup_dir = "static/backups"
+            os.makedirs(static_backup_dir, exist_ok=True)
+            final_backup_path = os.path.join(static_backup_dir, backup_filename)
+            shutil.move(backup_path, final_backup_path)
+
+            return BackupResponse(
+                message="备份创建成功",
+                filename=backup_filename,
+                size=file_size
+            )
+
+    except Exception as e:
+        print(f"❌ 备份失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"备份失败: {str(e)}")
+
+async def backup_database(db: Session, output_path: str):
+    """备份数据库到SQL文件（排除system_version表）"""
+    try:
+        # 获取数据库连接字符串
+        db_url = str(db.bind.url)
+
+        if "sqlite" in db_url:
+            # SQLite数据库备份
+            db_path = db_url.replace("sqlite:///", "")
+
+            # 连接到数据库
+            conn = sqlite3.connect(db_path)
+
+            # 获取所有表名（排除system_version）
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name != 'system_version'")
+            tables = [row[0] for row in cursor.fetchall()]
+
+            # 生成SQL备份
+            with open(output_path, 'w', encoding='utf-8') as f:
+                # 写入表结构和数据
+                for table in tables:
+                    # 获取表结构
+                    cursor.execute(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'")
+                    create_sql = cursor.fetchone()
+                    if create_sql:
+                        f.write(f"{create_sql[0]};\n\n")
+
+                    # 获取表数据
+                    cursor.execute(f"SELECT * FROM {table}")
+                    rows = cursor.fetchall()
+
+                    if rows:
+                        # 获取列名
+                        cursor.execute(f"PRAGMA table_info({table})")
+                        columns = [col[1] for col in cursor.fetchall()]
+
+                        for row in rows:
+                            values = []
+                            for value in row:
+                                if value is None:
+                                    values.append("NULL")
+                                elif isinstance(value, str):
+                                    # 转义单引号
+                                    escaped_value = value.replace("'", "''")
+                                    values.append(f"'{escaped_value}'")
+                                else:
+                                    values.append(str(value))
+
+                            f.write(f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(values)});\n")
+                        f.write("\n")
+
+            conn.close()
+            print(f"✅ SQLite数据库备份完成: {len(tables)} 个表")
+        else:
+            raise HTTPException(status_code=500, detail="暂不支持非SQLite数据库的备份")
+
+    except Exception as e:
+        print(f"❌ 数据库备份失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"数据库备份失败: {str(e)}")
+
+@router.get("/download-backup/{filename}")
+async def download_backup(
+    filename: str,
+    current_user: User = Depends(get_current_user)
+):
+    """下载备份文件"""
+    try:
+        backup_path = os.path.join("static/backups", filename)
+        if not os.path.exists(backup_path):
+            raise HTTPException(status_code=404, detail="备份文件不存在")
+
+        return FileResponse(
+            path=backup_path,
+            filename=filename,
+            media_type='application/octet-stream'
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"下载失败: {str(e)}")
+
+@router.post("/import-backup", response_model=RestoreResponse)
+async def import_backup(
+    backup_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """导入备份文件并恢复系统"""
+    try:
+        # 验证文件扩展名
+        if not backup_file.filename.endswith('.pb'):
+            raise HTTPException(status_code=400, detail="无效的备份文件格式，请选择.pb文件")
+
+        # 创建临时目录
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # 保存上传的文件
+            backup_path = os.path.join(temp_dir, backup_file.filename)
+            with open(backup_path, "wb") as buffer:
+                content = await backup_file.read()
+                buffer.write(content)
+
+            # 解压备份文件
+            extract_dir = os.path.join(temp_dir, "extracted")
+            os.makedirs(extract_dir, exist_ok=True)
+
+            try:
+                with tarfile.open(backup_path, "r:gz") as tar:
+                    tar.extractall(extract_dir)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"备份文件损坏或格式错误: {str(e)}")
+
+            files_restored = 0
+            tables_restored = 0
+
+            # 1. 恢复scripts目录
+            scripts_backup_path = os.path.join(extract_dir, "scripts")
+            if os.path.exists(scripts_backup_path):
+                scripts_dir = "scripts"
+                if os.path.exists(scripts_dir):
+                    # 备份现有scripts目录
+                    backup_existing_scripts = f"scripts_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    shutil.move(scripts_dir, backup_existing_scripts)
+                    print(f"✅ 已备份现有scripts目录到: {backup_existing_scripts}")
+
+                shutil.copytree(scripts_backup_path, scripts_dir)
+                files_restored = count_files_in_directory(scripts_dir)
+                print(f"✅ 已恢复scripts目录，共 {files_restored} 个文件")
+
+            # 2. 恢复数据库
+            db_backup_path = os.path.join(extract_dir, "database.sql")
+            if os.path.exists(db_backup_path):
+                tables_restored = await restore_database(db, db_backup_path)
+                print(f"✅ 已恢复数据库，共 {tables_restored} 个表")
+
+            return RestoreResponse(
+                message="备份恢复成功，系统将自动注销以刷新会话",
+                files_restored=files_restored,
+                tables_restored=tables_restored
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ 恢复失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"恢复失败: {str(e)}")
+
+async def restore_database(db: Session, sql_file_path: str):
+    """从SQL文件恢复数据库（保留system_version表）"""
+    try:
+        # 获取数据库连接字符串
+        db_url = str(db.bind.url)
+
+        if "sqlite" in db_url:
+            db_path = db_url.replace("sqlite:///", "")
+
+            # 读取SQL文件
+            with open(sql_file_path, 'r', encoding='utf-8') as f:
+                sql_content = f.read()
+
+            # 连接到数据库
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # 获取当前system_version表的数据（需要保留）
+            system_version_data = []
+            try:
+                cursor.execute("SELECT * FROM system_version")
+                system_version_data = cursor.fetchall()
+                print(f"✅ 已保存system_version表数据: {len(system_version_data)} 条记录")
+            except sqlite3.OperationalError:
+                print("ℹ️ system_version表不存在，跳过保存")
+
+            # 获取需要删除的表（排除system_version）
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name != 'system_version'")
+            tables_to_drop = [row[0] for row in cursor.fetchall()]
+
+            # 删除现有表（排除system_version）
+            for table in tables_to_drop:
+                cursor.execute(f"DROP TABLE IF EXISTS {table}")
+
+            # 执行恢复SQL
+            cursor.executescript(sql_content)
+
+            # 恢复system_version表数据
+            if system_version_data:
+                try:
+                    # 如果备份中包含system_version表，先删除
+                    cursor.execute("DROP TABLE IF EXISTS system_version")
+
+                    # 重新创建system_version表
+                    cursor.execute("""
+                        CREATE TABLE system_version (
+                            id INTEGER PRIMARY KEY,
+                            version VARCHAR(20) NOT NULL,
+                            description TEXT,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            is_current BOOLEAN DEFAULT 1
+                        )
+                    """)
+
+                    # 插入保存的数据
+                    for row in system_version_data:
+                        placeholders = ','.join(['?' for _ in row])
+                        cursor.execute(f"INSERT INTO system_version VALUES ({placeholders})", row)
+
+                    print(f"✅ 已恢复system_version表数据")
+                except Exception as e:
+                    print(f"⚠️ 恢复system_version表失败: {str(e)}")
+
+            conn.commit()
+            conn.close()
+
+            # 获取恢复的表数量
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+            table_count = cursor.fetchone()[0]
+            conn.close()
+
+            return table_count
+        else:
+            raise HTTPException(status_code=500, detail="暂不支持非SQLite数据库的恢复")
+
+    except Exception as e:
+        print(f"❌ 数据库恢复失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"数据库恢复失败: {str(e)}")
+
+def count_files_in_directory(directory: str) -> int:
+    """递归计算目录中的文件数量"""
+    count = 0
+    for root, dirs, files in os.walk(directory):
+        count += len(files)
+    return count

@@ -2,8 +2,9 @@
 任务管理相关路由
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel
 from app.database import get_db
 from app.auth import get_current_user
@@ -20,6 +21,7 @@ class TaskCreate(BaseModel):
     script_type: str  # python 或 nodejs
     cron_expression: str
     environment_vars: Optional[dict] = {}
+    group_name: Optional[str] = "默认"
 
 class TaskUpdate(BaseModel):
     name: Optional[str] = None
@@ -28,6 +30,7 @@ class TaskUpdate(BaseModel):
     script_type: Optional[str] = None
     cron_expression: Optional[str] = None
     environment_vars: Optional[dict] = None
+    group_name: Optional[str] = None
     is_active: Optional[bool] = None
 
 class TaskResponse(BaseModel):
@@ -38,12 +41,34 @@ class TaskResponse(BaseModel):
     script_type: str
     cron_expression: str
     environment_vars: dict
+    group_name: str
     is_active: bool
     created_at: str
     updated_at: Optional[str]
 
     class Config:
         from_attributes = True
+
+class PaginatedTasksResponse(BaseModel):
+    tasks: List[TaskResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+class TaskGroupsResponse(BaseModel):
+    groups: List[str]
+
+class TaskStatsResponse(BaseModel):
+    total_tasks: int
+    active_tasks: int
+
+class GroupRenameRequest(BaseModel):
+    old_name: str
+    new_name: str
+
+class GroupDeleteRequest(BaseModel):
+    group_name: str
 
 def validate_cron_expression(cron_expr: str) -> bool:
     """验证cron表达式格式"""
@@ -86,6 +111,7 @@ async def create_task(
         script_type=task_data.script_type,
         cron_expression=task_data.cron_expression,
         environment_vars=task_data.environment_vars or {},
+        group_name=task_data.group_name or "默认",
         is_active=True
     )
     
@@ -104,33 +130,156 @@ async def create_task(
         script_type=task.script_type,
         cron_expression=task.cron_expression,
         environment_vars=task.environment_vars,
+        group_name=task.group_name,
         is_active=task.is_active,
         created_at=format_datetime(task.created_at, db),
         updated_at=format_datetime(task.updated_at, db) if task.updated_at else None
     )
 
-@router.get("/", response_model=List[TaskResponse])
+@router.get("/", response_model=PaginatedTasksResponse)
 async def get_tasks(
+    group_name: Optional[str] = Query(None, description="任务分组名称"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(30, ge=1, le=100, description="每页数量"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取所有任务"""
-    tasks = db.query(Task).all()
-    return [
-        TaskResponse(
-            id=task.id,
-            name=task.name,
-            description=task.description,
-            script_path=task.script_path,
-            script_type=task.script_type,
-            cron_expression=task.cron_expression,
-            environment_vars=task.environment_vars,
-            is_active=task.is_active,
-            created_at=format_datetime(task.created_at, db),
-            updated_at=format_datetime(task.updated_at, db) if task.updated_at else None
-        )
-        for task in tasks
-    ]
+    """获取任务列表（支持分组和分页）"""
+    # 构建查询
+    query = db.query(Task)
+
+    # 按分组过滤
+    if group_name:
+        query = query.filter(Task.group_name == group_name)
+
+    # 获取总数
+    total = query.count()
+
+    # 分页
+    offset = (page - 1) * page_size
+    tasks = query.offset(offset).limit(page_size).all()
+
+    # 计算总页数
+    total_pages = (total + page_size - 1) // page_size
+
+    return PaginatedTasksResponse(
+        tasks=[
+            TaskResponse(
+                id=task.id,
+                name=task.name,
+                description=task.description,
+                script_path=task.script_path,
+                script_type=task.script_type,
+                cron_expression=task.cron_expression,
+                environment_vars=task.environment_vars,
+                group_name=task.group_name,
+                is_active=task.is_active,
+                created_at=format_datetime(task.created_at, db),
+                updated_at=format_datetime(task.updated_at, db) if task.updated_at else None
+            )
+            for task in tasks
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages
+    )
+
+@router.get("/groups", response_model=TaskGroupsResponse)
+async def get_task_groups(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取所有任务分组"""
+    groups = db.query(Task.group_name).distinct().all()
+    group_names = [group[0] for group in groups]
+
+    # 确保"默认"分组总是存在
+    if "默认" not in group_names:
+        group_names.insert(0, "默认")
+
+    return TaskGroupsResponse(groups=group_names)
+
+@router.get("/stats", response_model=TaskStatsResponse)
+async def get_task_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取任务统计信息"""
+    total_tasks = db.query(Task).count()
+    active_tasks = db.query(Task).filter(Task.is_active == True).count()
+
+    return TaskStatsResponse(
+        total_tasks=total_tasks,
+        active_tasks=active_tasks
+    )
+
+@router.put("/groups/rename")
+async def rename_task_group(
+    rename_data: GroupRenameRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """重命名任务分组"""
+    old_name = rename_data.old_name
+    new_name = rename_data.new_name
+
+    # 验证输入
+    if not old_name or not new_name:
+        raise HTTPException(status_code=400, detail="分组名称不能为空")
+
+    if old_name == new_name:
+        raise HTTPException(status_code=400, detail="新分组名称与原名称相同")
+
+    # 检查原分组是否存在
+    existing_tasks = db.query(Task).filter(Task.group_name == old_name).first()
+    if not existing_tasks:
+        raise HTTPException(status_code=404, detail="原分组不存在")
+
+    # 检查新分组名称是否已存在
+    existing_new_group = db.query(Task).filter(Task.group_name == new_name).first()
+    if existing_new_group:
+        raise HTTPException(status_code=400, detail="新分组名称已存在")
+
+    # 更新所有该分组下的任务
+    updated_count = db.query(Task).filter(Task.group_name == old_name).update(
+        {Task.group_name: new_name}
+    )
+    db.commit()
+
+    return {"message": f"分组 '{old_name}' 已重命名为 '{new_name}'，共更新 {updated_count} 个任务"}
+
+@router.delete("/groups/delete")
+async def delete_task_group(
+    delete_data: GroupDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """删除任务分组及其下所有任务"""
+    group_name = delete_data.group_name
+
+    # 验证输入
+    if not group_name:
+        raise HTTPException(status_code=400, detail="分组名称不能为空")
+
+    # 不允许删除"默认"分组
+    if group_name == "默认":
+        raise HTTPException(status_code=400, detail="不能删除默认分组")
+
+    # 检查分组是否存在
+    tasks_in_group = db.query(Task).filter(Task.group_name == group_name).all()
+    if not tasks_in_group:
+        raise HTTPException(status_code=404, detail="分组不存在")
+
+    # 从调度器中移除所有任务
+    for task in tasks_in_group:
+        task_scheduler.remove_task(task.id)
+
+    # 删除所有该分组下的任务
+    deleted_count = db.query(Task).filter(Task.group_name == group_name).delete()
+    db.commit()
+
+    return {"message": f"分组 '{group_name}' 及其下 {deleted_count} 个任务已删除"}
 
 @router.get("/{task_id}", response_model=TaskResponse)
 async def get_task(
@@ -151,6 +300,7 @@ async def get_task(
         script_type=task.script_type,
         cron_expression=task.cron_expression,
         environment_vars=task.environment_vars,
+        group_name=task.group_name,
         is_active=task.is_active,
         created_at=format_datetime(task.created_at, db),
         updated_at=format_datetime(task.updated_at, db) if task.updated_at else None
@@ -203,6 +353,7 @@ async def update_task(
         script_type=task.script_type,
         cron_expression=task.cron_expression,
         environment_vars=task.environment_vars,
+        group_name=task.group_name,
         is_active=task.is_active,
         created_at=format_datetime(task.created_at, db),
         updated_at=format_datetime(task.updated_at, db) if task.updated_at else None

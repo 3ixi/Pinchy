@@ -196,14 +196,13 @@ async def get_captcha(request: Request, db: Session = Depends(get_db)):
 
     # 生成验证码
     captcha_generator = CaptchaGenerator()
-    expression, answer, image_data = captcha_generator.generate()
+    _, answer, image_data = captcha_generator.generate()
 
     # 将答案存储到安全配置中（使用IP作为键）
     security_manager.set_security_config(db, f"captcha_answer_{client_ip}", str(answer))
 
     return {
-        "image_data": image_data,
-        "expression": expression
+        "image_data": image_data
     }
 
 @router.post("/send-mfa-code")
