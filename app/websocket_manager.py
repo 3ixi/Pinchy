@@ -80,6 +80,16 @@ class WebSocketManager:
         else:
             return sum(len(connections) for connections in self.active_connections.values())
 
+    async def send_debug_output(self, debug_id: str, message: dict):
+        """发送脚本调试输出"""
+        debug_message = {
+            "type": "debug_output",
+            "debug_id": debug_id,
+            "data": message
+        }
+        # 发送到全局房间，前端可以根据debug_id过滤
+        await self.broadcast(debug_message, "global")
+
 
 # 全局WebSocket管理器实例
 websocket_manager = WebSocketManager()

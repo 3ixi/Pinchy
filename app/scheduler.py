@@ -21,6 +21,10 @@ class TaskScheduler:
         self.running_tasks: Dict[int, Any] = {}
         # 任务日志缓存，用于存储正在运行任务的实时日志
         self.task_log_cache: Dict[int, Dict] = {}
+        # 脚本调试缓存，用于存储正在调试的脚本信息
+        self.debug_cache: Dict[str, Dict] = {}
+        # 调试ID计数器
+        self.debug_id_counter = 0
 
     def get_command_config(self, db, command_type: str) -> str:
         """从数据库获取命令配置"""
@@ -41,6 +45,239 @@ class TaskScheduler:
         """获取任务日志缓存"""
         return self.task_log_cache.get(task_id, {})
 
+    def get_debug_cache(self, debug_id: str) -> Dict:
+        """获取脚本调试缓存"""
+        return self.debug_cache.get(debug_id, {})
+
+    async def debug_script(self, script_path: str, script_type: str, command: str, db) -> str:
+        """调试脚本"""
+        import asyncio
+        import os
+        import queue
+        import threading
+
+        # 生成调试ID
+        self.debug_id_counter += 1
+        debug_id = f"debug_{self.debug_id_counter}"
+
+        # 初始化调试缓存
+        self.debug_cache[debug_id] = {
+            "script_path": script_path,
+            "script_type": script_type,
+            "command": command,
+            "status": "running",
+            "output": [],
+            "start_time": datetime.now(),
+            "process": None
+        }
+
+        # 异步执行脚本
+        asyncio.create_task(self._execute_debug_script(debug_id, script_path, script_type, command, db))
+
+        return debug_id
+
+    async def _execute_debug_script(self, debug_id: str, script_path: str, script_type: str, command: str, db):
+        """执行调试脚本的内部方法"""
+        import asyncio
+        import os
+        import queue
+        import threading
+        from app.websocket_manager import websocket_manager
+
+        try:
+            # 确定脚本的完整路径
+            scripts_dir = os.path.join(os.getcwd(), "scripts")
+            script_full_path = os.path.join(scripts_dir, script_path)
+
+            # 检查脚本文件是否存在
+            if not os.path.exists(script_full_path):
+                raise FileNotFoundError(f"脚本文件不存在: {script_full_path}")
+
+            # 确定工作目录：脚本所在的目录
+            script_dir = os.path.dirname(script_full_path)
+            if not script_dir or script_dir == scripts_dir:
+                # 如果脚本在scripts根目录下
+                work_dir = scripts_dir
+            else:
+                # 如果脚本在子目录下，使用脚本所在的目录作为工作目录
+                work_dir = script_dir
+
+            # 准备环境变量
+            env_vars = os.environ.copy()
+
+            # 设置UTF-8编码相关环境变量
+            env_vars['PYTHONIOENCODING'] = 'utf-8'
+            env_vars['LANG'] = 'zh_CN.UTF-8'
+            env_vars['LC_ALL'] = 'zh_CN.UTF-8'
+
+            # 设置Python无缓冲输出，确保实时显示
+            if script_type == "python":
+                env_vars['PYTHONUNBUFFERED'] = '1'
+
+            # 为Node.js设置NODE_PATH
+            if script_type == "nodejs":
+                # 确保Node.js能找到全局模块
+                if 'NODE_PATH' not in env_vars:
+                    # 尝试获取npm全局路径
+                    try:
+                        import subprocess
+                        import platform
+                        is_windows = platform.system().lower() == 'windows'
+
+                        result = subprocess.run(
+                            ["npm", "root", "-g"],
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                            shell=is_windows
+                        )
+                        if result.returncode == 0 and result.stdout.strip():
+                            env_vars['NODE_PATH'] = result.stdout.strip()
+                            print(f"✓ 调试模式设置NODE_PATH: {result.stdout.strip()}")
+                        else:
+                            # 使用默认路径
+                            default_node_path = "/usr/local/lib/node_modules"
+                            env_vars['NODE_PATH'] = default_node_path
+                            print(f"✓ 调试模式使用默认NODE_PATH: {default_node_path}")
+                    except Exception as e:
+                        print(f"⚠️ 调试模式获取NODE_PATH失败: {e}")
+                        # 使用默认路径
+                        default_node_path = "/usr/local/lib/node_modules"
+                        env_vars['NODE_PATH'] = default_node_path
+                        print(f"✓ 调试模式使用默认NODE_PATH: {default_node_path}")
+
+                # 同时检查本地node_modules
+                local_node_modules_path = os.path.join(scripts_dir, "node_modules")
+                if os.path.exists(local_node_modules_path):
+                    # 如果已有NODE_PATH，则追加本地路径
+                    if env_vars.get("NODE_PATH"):
+                        import platform
+                        separator = ";" if platform.system().lower() == 'windows' else ":"
+                        env_vars["NODE_PATH"] = f"{env_vars['NODE_PATH']}{separator}{local_node_modules_path}"
+                    else:
+                        env_vars["NODE_PATH"] = local_node_modules_path
+                    print(f"✓ 调试模式追加本地NODE_PATH: {local_node_modules_path}")
+
+            # 添加数据库中的环境变量
+            from app.models import EnvironmentVariable
+            db_env_vars = db.query(EnvironmentVariable).all()
+            for env_var in db_env_vars:
+                env_vars[str(env_var.key)] = str(env_var.value)
+
+            # 构建执行命令
+            cmd = [command, script_full_path]
+
+            print(f"调试脚本: {' '.join(cmd)}")
+            print(f"✓ 调试脚本将在目录 {work_dir} 下执行")
+            print(f"✓ 调试模式NODE_PATH: {env_vars.get('NODE_PATH', '未设置')}")
+            print(f"✓ 调试脚本完整路径: {script_full_path}")
+
+            # 执行命令，使用脚本所在目录作为工作目录
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env_vars,
+                cwd=work_dir
+            )
+
+            # 更新调试缓存
+            self.debug_cache[debug_id]["process"] = process
+
+            # 存储输出
+            output_lines = []
+            sent_lines = set()  # 用于防止重复发送相同的行
+
+            # 读取输出的异步函数
+            async def read_stream(stream, stream_name):
+                while True:
+                    try:
+                        line = await stream.readline()
+                        if not line:
+                            break
+
+                        line_text = line.decode('utf-8', errors='replace').rstrip()
+                        if line_text:
+                            # 添加到输出列表
+                            formatted_line = f"[{stream_name}] {line_text}"
+                            output_lines.append(formatted_line)
+
+                            # 更新调试缓存
+                            self.debug_cache[debug_id]["output"] = output_lines.copy()
+
+                            # 生成唯一标识符防止重复发送
+                            line_id = f"{stream_name}:{line_text}:{len(output_lines)}"
+                            if line_id not in sent_lines:
+                                sent_lines.add(line_id)
+
+                                # 通过WebSocket发送实时输出（只发送当前行）
+                                await websocket_manager.send_debug_output(debug_id, {
+                                    "type": "output",
+                                    "content": line_text,
+                                    "stream": stream_name,
+                                    "timestamp": datetime.now().isoformat()
+                                })
+
+                                print(f"[调试输出] {formatted_line}")
+                            else:
+                                print(f"[调试输出-跳过重复] {formatted_line}")
+                    except Exception as e:
+                        print(f"读取{stream_name}流时出错: {str(e)}")
+                        break
+
+            # 同时读取stdout和stderr
+            await asyncio.gather(
+                read_stream(process.stdout, "stdout"),
+                read_stream(process.stderr, "stderr")
+            )
+
+            # 等待进程结束
+            return_code = await process.wait()
+
+            # 更新调试状态
+            self.debug_cache[debug_id]["status"] = "completed" if return_code == 0 else "failed"
+            self.debug_cache[debug_id]["return_code"] = return_code
+            self.debug_cache[debug_id]["end_time"] = datetime.now()
+
+            # 发送完成消息
+            await websocket_manager.send_debug_output(debug_id, {
+                "type": "completed",
+                "return_code": return_code,
+                "timestamp": datetime.now().isoformat()
+            })
+
+        except Exception as e:
+            error_msg = f"脚本调试失败: {str(e)}"
+            print(error_msg)
+
+            # 更新调试状态
+            self.debug_cache[debug_id]["status"] = "error"
+            self.debug_cache[debug_id]["error"] = error_msg
+            self.debug_cache[debug_id]["end_time"] = datetime.now()
+
+            # 发送错误消息
+            await websocket_manager.send_debug_output(debug_id, {
+                "type": "error",
+                "content": error_msg,
+                "timestamp": datetime.now().isoformat()
+            })
+
+    def stop_debug_script(self, debug_id: str):
+        """停止调试脚本"""
+        if debug_id in self.debug_cache:
+            debug_info = self.debug_cache[debug_id]
+            process = debug_info.get("process")
+            if process:
+                try:
+                    process.terminate()
+                    debug_info["status"] = "stopped"
+                    debug_info["end_time"] = datetime.now()
+                except Exception as e:
+                    print(f"停止调试脚本失败: {str(e)}")
+
+            # 清理调试缓存
+            del self.debug_cache[debug_id]
+
     def clear_task_log_cache(self, task_id: int):
         """清理任务日志缓存"""
         if task_id in self.task_log_cache:
@@ -60,8 +297,11 @@ class TaskScheduler:
         """从数据库加载任务"""
         db = SessionLocal()
         try:
-            # 加载普通任务
-            tasks = db.query(Task).filter(Task.is_active == True).all()
+            # 加载普通任务（排除占位任务）
+            tasks = db.query(Task).filter(
+                Task.is_active == True,
+                ~Task.name.like('__GROUP_PLACEHOLDER_%')
+            ).all()
             for task in tasks:
                 self.add_task(task)
             print(f"已加载 {len(tasks)} 个活跃任务")
@@ -87,22 +327,36 @@ class TaskScheduler:
     def add_task(self, task: Task):
         """添加任务到调度器"""
         try:
-            # 解析cron表达式
+            # 解析cron表达式，支持5字段和6字段格式
             cron_parts = task.cron_expression.split()
-            if len(cron_parts) != 5:
+            if len(cron_parts) not in [5, 6]:
                 print(f"任务 {task.name} 的cron表达式格式错误: {task.cron_expression}")
                 return
-                
-            minute, hour, day, month, day_of_week = cron_parts
-            
-            # 创建cron触发器
-            trigger = CronTrigger(
-                minute=minute,
-                hour=hour,
-                day=day,
-                month=month,
-                day_of_week=day_of_week
-            )
+
+            # 处理6字段格式（包含秒）
+            if len(cron_parts) == 6:
+                second, minute, hour, day, month, day_of_week = cron_parts
+                # 创建cron触发器（包含秒）
+                trigger = CronTrigger(
+                    second=second,
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=day_of_week
+                )
+            else:
+                # 处理5字段格式（传统格式，秒默认为0）
+                minute, hour, day, month, day_of_week = cron_parts
+                # 创建cron触发器
+                trigger = CronTrigger(
+                    second=0,  # 默认在每分钟的0秒执行
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=day_of_week
+                )
             
             # 添加任务到调度器
             self.scheduler.add_job(
@@ -121,22 +375,36 @@ class TaskScheduler:
     def add_debug_config(self, config: ApiDebugConfig):
         """添加接口调试配置到调度器"""
         try:
-            # 解析cron表达式
+            # 解析cron表达式，支持5字段和6字段格式
             cron_parts = config.cron_expression.split()
-            if len(cron_parts) != 5:
+            if len(cron_parts) not in [5, 6]:
                 print(f"接口调试配置 {config.name} 的cron表达式格式错误: {config.cron_expression}")
                 return
 
-            minute, hour, day, month, day_of_week = cron_parts
-
-            # 创建cron触发器
-            trigger = CronTrigger(
-                minute=minute,
-                hour=hour,
-                day=day,
-                month=month,
-                day_of_week=day_of_week
-            )
+            # 处理6字段格式（包含秒）
+            if len(cron_parts) == 6:
+                second, minute, hour, day, month, day_of_week = cron_parts
+                # 创建cron触发器（包含秒）
+                trigger = CronTrigger(
+                    second=second,
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=day_of_week
+                )
+            else:
+                # 处理5字段格式（传统格式，秒默认为0）
+                minute, hour, day, month, day_of_week = cron_parts
+                # 创建cron触发器
+                trigger = CronTrigger(
+                    second=0,  # 默认在每分钟的0秒执行
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=day_of_week
+                )
 
             # 添加任务到调度器
             self.scheduler.add_job(
@@ -155,22 +423,36 @@ class TaskScheduler:
     def add_subscription(self, subscription: ScriptSubscription):
         """添加脚本订阅到调度器"""
         try:
-            # 解析cron表达式
+            # 解析cron表达式，支持5字段和6字段格式
             cron_parts = subscription.cron_expression.split()
-            if len(cron_parts) != 5:
+            if len(cron_parts) not in [5, 6]:
                 print(f"脚本订阅 {subscription.name} 的cron表达式格式错误: {subscription.cron_expression}")
                 return
 
-            minute, hour, day, month, day_of_week = cron_parts
-
-            # 创建cron触发器
-            trigger = CronTrigger(
-                minute=minute,
-                hour=hour,
-                day=day,
-                month=month,
-                day_of_week=day_of_week
-            )
+            # 处理6字段格式（包含秒）
+            if len(cron_parts) == 6:
+                second, minute, hour, day, month, day_of_week = cron_parts
+                # 创建cron触发器（包含秒）
+                trigger = CronTrigger(
+                    second=second,
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=day_of_week
+                )
+            else:
+                # 处理5字段格式（传统格式，秒默认为0）
+                minute, hour, day, month, day_of_week = cron_parts
+                # 创建cron触发器
+                trigger = CronTrigger(
+                    second=0,  # 默认在每分钟的0秒执行
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=day_of_week
+                )
 
             # 添加任务到调度器
             self.scheduler.add_job(
@@ -326,18 +608,28 @@ class TaskScheduler:
                 if not os.path.exists(script_full_path):
                     raise FileNotFoundError(f"脚本文件不存在: {script_full_path}")
 
+                # 确定工作目录：脚本所在的目录
+                script_dir = os.path.dirname(script_full_path)
+                if not script_dir or script_dir == scripts_dir:
+                    # 如果脚本在scripts根目录下
+                    work_dir = scripts_dir
+                else:
+                    # 如果脚本在子目录下，使用脚本所在的目录作为工作目录
+                    work_dir = script_dir
+
                 if script_type == "python":
                     python_command = self.get_command_config(db, "python")
                     cmd = [python_command, script_full_path]
                 elif script_type == "nodejs":
                     nodejs_command = self.get_command_config(db, "nodejs")
                     cmd = [nodejs_command, script_full_path]
-                    print(f"✓ Node.js脚本将在目录 {scripts_dir} 下执行")
+                    print(f"✓ Node.js脚本将在目录 {work_dir} 下执行")
                     print(f"✓ NODE_PATH: {env_vars.get('NODE_PATH', '未设置')}")
                 else:
                     raise ValueError(f"不支持的脚本类型: {script_type}")
 
                 print(f"执行命令: {' '.join(cmd)}")
+                print(f"✓ 脚本将在目录 {work_dir} 下执行")
 
                 # 执行命令，工作目录统一设置为scripts目录
                 process = await asyncio.create_subprocess_exec(
@@ -385,11 +677,7 @@ class TaskScheduler:
                 env_vars['PYTHONUNBUFFERED'] = '1'
                 env_vars['PYTHONIOENCODING'] = 'utf-8'
 
-                # 确定工作目录
-                # 所有脚本都在scripts目录下执行，保持与定时任务执行的一致性
-                work_dir = scripts_dir
-
-                # 启动进程
+                # 启动进程，使用脚本所在目录作为工作目录
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,

@@ -141,13 +141,15 @@ function app() {
 
         // Cron生成器相关
         cronForm: {
+            second: '0',
             minute: '*',
             hour: '*',
             day: '*',
             month: '*',
             weekday: '*'
         },
-        generatedCron: '* * * * *',
+        generatedCron: '0 * * * * *',
+        enableSeconds: false, // 是否启用秒级精度
 
         // 表单数据
         taskForm: {
@@ -200,6 +202,15 @@ function app() {
             totalPages: 0
         },
 
+        // 通知设置页面的任务分页
+        notificationTasksPagination: {
+            page: 1,
+            pageSize: 20,
+            total: 0,
+            totalPages: 0
+        },
+        notificationTasks: [], // 通知设置页面专用的任务列表
+
         // 分组管理相关
         showGroupRenameModal: false,
         showGroupDeleteModal: false,
@@ -211,6 +222,7 @@ function app() {
             groupName: ''
         },
         activeGroupDropdown: null, // 当前激活的下拉菜单
+        groupDropdownPosition: { top: 0, left: 0 }, // 下拉菜单位置
         files: [],
         logs: [],
         envVars: [],
@@ -314,6 +326,8 @@ function app() {
         systemInfo: null,
         systemVersion: '',
         environmentCheck: null,
+        currentTime: null, // 动态当前时间
+        timeUpdateInterval: null, // 时间更新定时器
 
         // 时区配置相关
         timezoneConfig: null,
@@ -375,6 +389,25 @@ function app() {
             upgrade_info: ''
         },
         showVersionModal: false,
+
+        // 版本历史相关
+        showVersionHistoryModalVisible: false,
+        versionHistory: [],
+        versionHistoryLoading: false,
+
+        // 脚本调试相关
+        debugMode: {
+            active: false,
+            scriptPath: '',
+            scriptName: '',
+            content: '',
+            output: [],
+            status: 'idle', // idle, running, completed, error
+            debugId: null,
+            saving: false,
+            running: false,
+            editor: null // CodeMirror实例
+        },
 
         // 命令配置相关
         commandConfig: {
@@ -710,6 +743,19 @@ function app() {
             } else if (data.type.startsWith('subscription_sync_')) {
                 // 订阅同步消息使用订阅ID和类型生成ID
                 messageId = `${data.type}_${data.subscription_id}_${data.log_id || Date.now()}`;
+            } else if (data.type === 'debug_output') {
+                // 调试输出消息使用debug_id、内容和时间戳生成更精确的ID
+                const debugData = data.data || {};
+                if (debugData.type === 'output') {
+                    // 对于输出消息，使用内容哈希和时间戳
+                    const contentHash = debugData.content ? this.simpleHash(debugData.content) : '';
+                    const timestamp = debugData.timestamp || Date.now();
+                    messageId = `${data.type}_${data.debug_id}_output_${contentHash}_${timestamp}`;
+                } else {
+                    // 对于其他类型消息（completed, error），使用类型和时间戳
+                    const timestamp = debugData.timestamp || Date.now();
+                    messageId = `${data.type}_${data.debug_id}_${debugData.type}_${timestamp}`;
+                }
             } else {
                 // 任务消息使用原有逻辑
                 messageId = `${data.type}_${data.task_id}_${data.log_id || Date.now()}`;
@@ -885,6 +931,10 @@ function app() {
                             this.loadSubscriptions();
                         }
                     }
+                    break;
+                case 'debug_output':
+                    // 处理脚本调试输出
+                    this.handleDebugOutput(data);
                     break;
             }
         },
@@ -1149,12 +1199,47 @@ function app() {
         },
 
         // 分组管理方法
-        toggleGroupDropdown(groupName) {
+        toggleGroupDropdown(groupName, event) {
             if (this.activeGroupDropdown === groupName) {
                 this.activeGroupDropdown = null;
             } else {
                 this.activeGroupDropdown = groupName;
+                // 计算下拉菜单位置
+                this.calculateDropdownPosition(event.target);
             }
+        },
+
+        // 计算下拉菜单位置
+        calculateDropdownPosition(buttonElement) {
+            const rect = buttonElement.getBoundingClientRect();
+            const dropdownWidth = 128; // w-32 = 8rem = 128px
+            const dropdownHeight = 80; // 估算的下拉菜单高度
+
+            // 计算初始位置（按钮下方）
+            let top = rect.bottom + window.scrollY + 4; // 4px margin
+            let left = rect.left + window.scrollX;
+
+            // 检查是否超出视窗右边界
+            if (left + dropdownWidth > window.innerWidth) {
+                left = rect.right + window.scrollX - dropdownWidth;
+            }
+
+            // 检查是否超出视窗下边界
+            if (top + dropdownHeight > window.innerHeight + window.scrollY) {
+                top = rect.top + window.scrollY - dropdownHeight - 4; // 显示在按钮上方
+            }
+
+            // 确保不超出左边界
+            if (left < 0) {
+                left = 4;
+            }
+
+            // 确保不超出上边界
+            if (top < window.scrollY) {
+                top = window.scrollY + 4;
+            }
+
+            this.groupDropdownPosition = { top, left };
         },
 
         closeGroupDropdown() {
@@ -1307,10 +1392,55 @@ function app() {
                     this.showToast('任务创建成功', 'success');
                 }
                 this.showTaskModal = false;
+                // 刷新分组列表和任务列表
+                await this.loadTaskGroups();
                 await this.loadTasks();
                 this.dataLoaded.tasks = true;
             } catch (error) {
                 console.error('保存任务失败:', error);
+            }
+        },
+
+        // 创建新分组
+        async createNewGroup() {
+            if (!this.newGroupName.trim()) {
+                this.showToast('请输入分组名称', 'error');
+                return;
+            }
+
+            try {
+                await this.apiRequest('/api/tasks/groups/create', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        group_name: this.newGroupName.trim()
+                    })
+                });
+
+                // 设置表单中的分组名称
+                this.taskForm.group_name = this.newGroupName.trim();
+                this.showToast('分组创建成功', 'success');
+                this.newGroupName = '';
+
+                // 刷新分组列表
+                await this.loadTaskGroups();
+            } catch (error) {
+                console.error('创建分组失败:', error);
+                this.showToast('创建分组失败', 'error');
+            }
+        },
+
+        // 刷新任务数据
+        async refreshTaskData() {
+            try {
+                this.tasksLoading = true;
+                await this.loadTaskGroups();
+                await this.loadTasks();
+                this.showToast('列表刷新成功', 'success');
+            } catch (error) {
+                console.error('刷新列表失败:', error);
+                this.showToast('刷新列表失败', 'error');
+            } finally {
+                this.tasksLoading = false;
             }
         },
 
@@ -1355,17 +1485,26 @@ function app() {
                 return '已禁用';
             }
 
-            // 改进的cron表达式解析
+            // 改进的cron表达式解析，支持5字段和6字段格式
             try {
                 const cronParts = task.cron_expression.split(' ');
-                if (cronParts.length !== 5) {
+                if (cronParts.length !== 5 && cronParts.length !== 6) {
                     return '表达式格式错误';
                 }
 
-                const [minute, hour, day, month, weekday] = cronParts;
+                let second, minute, hour, day, month, weekday;
+
+                if (cronParts.length === 6) {
+                    // 6字段格式（包含秒）
+                    [second, minute, hour, day, month, weekday] = cronParts;
+                } else {
+                    // 5字段格式（传统格式）
+                    [minute, hour, day, month, weekday] = cronParts;
+                    second = '0'; // 默认秒为0
+                }
 
                 // 生成描述性文本
-                let description = this.generateCronDescription(minute, hour, day, month, weekday);
+                let description = this.generateCronDescription(second, minute, hour, day, month, weekday, cronParts.length === 6);
 
                 // 如果能计算出具体的下次执行时间，优先显示
                 const nextTime = this.calculateNextCronTime(task.cron_expression);
@@ -1381,21 +1520,36 @@ function app() {
         },
 
         // 生成Cron表达式的描述
-        generateCronDescription(minute, hour, day, month, weekday) {
+        generateCronDescription(second, minute, hour, day, month, weekday, hasSeconds = false) {
+            // 处理秒级间隔
+            if (hasSeconds && second.startsWith('*/')) {
+                const interval = parseInt(second.substring(2));
+                return `每${interval}秒`;
+            }
+
             // 处理分钟间隔
             if (minute.startsWith('*/')) {
                 const interval = parseInt(minute.substring(2));
+                if (hasSeconds && second !== '0' && second !== '*') {
+                    return `每${interval}分钟第${second}秒`;
+                }
                 return `每${interval}分钟`;
             }
 
             // 处理小时间隔
             if (hour.startsWith('*/') && minute === '0') {
                 const interval = parseInt(hour.substring(2));
+                if (hasSeconds && second !== '0' && second !== '*') {
+                    return `每${interval}小时第${second}秒`;
+                }
                 return `每${interval}小时`;
             }
 
             // 处理每小时执行
             if (minute !== '*' && hour === '*') {
+                if (hasSeconds && second !== '0' && second !== '*') {
+                    return `每小时第${minute}分${second}秒`;
+                }
                 return `每小时第${minute}分钟`;
             }
 
@@ -1403,7 +1557,12 @@ function app() {
             if (minute !== '*' && hour !== '*' && day === '*' && month === '*' && weekday === '*') {
                 const h = parseInt(hour);
                 const m = parseInt(minute);
-                return `每天 ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                const timeStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                if (hasSeconds && second !== '0' && second !== '*') {
+                    const s = parseInt(second);
+                    return `每天 ${timeStr}:${s.toString().padStart(2, '0')}`;
+                }
+                return `每天 ${timeStr}`;
             }
 
             // 处理每周执行
@@ -1412,7 +1571,12 @@ function app() {
                 const h = parseInt(hour);
                 const m = parseInt(minute);
                 const wd = parseInt(weekday);
-                return `每${weekdays[wd]} ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                const timeStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                if (hasSeconds && second !== '0' && second !== '*') {
+                    const s = parseInt(second);
+                    return `每${weekdays[wd]} ${timeStr}:${s.toString().padStart(2, '0')}`;
+                }
+                return `每${weekdays[wd]} ${timeStr}`;
             }
 
             // 处理每月执行
@@ -1420,7 +1584,12 @@ function app() {
                 const h = parseInt(hour);
                 const m = parseInt(minute);
                 const d = parseInt(day);
-                return `每月${d}日 ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                const timeStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                if (hasSeconds && second !== '0' && second !== '*') {
+                    const s = parseInt(second);
+                    return `每月${d}日 ${timeStr}:${s.toString().padStart(2, '0')}`;
+                }
+                return `每月${d}日 ${timeStr}`;
             }
 
             // 处理特定月份执行
@@ -1430,7 +1599,12 @@ function app() {
                 const m = parseInt(minute);
                 const d = parseInt(day);
                 const mon = parseInt(month);
-                return `${months[mon]}${d}日 ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                const timeStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                if (hasSeconds && second !== '0' && second !== '*') {
+                    const s = parseInt(second);
+                    return `${months[mon]}${d}日 ${timeStr}:${s.toString().padStart(2, '0')}`;
+                }
+                return `${months[mon]}${d}日 ${timeStr}`;
             }
 
             return '';
@@ -1440,32 +1614,94 @@ function app() {
         calculateNextCronTime(cronExpression) {
             try {
                 const cronParts = cronExpression.split(' ');
-                if (cronParts.length !== 5) return null;
+                if (cronParts.length !== 5 && cronParts.length !== 6) return null;
 
-                const [minute, hour, day, month, weekday] = cronParts;
+                let second, minute, hour, day, month, weekday;
+
+                if (cronParts.length === 6) {
+                    // 6字段格式（包含秒）
+                    [second, minute, hour, day, month, weekday] = cronParts;
+                } else {
+                    // 5字段格式（传统格式）
+                    [minute, hour, day, month, weekday] = cronParts;
+                    second = '0'; // 默认秒为0
+                }
+
                 const now = new Date();
                 let next = new Date(now);
-                next.setSeconds(0, 0); // 重置秒和毫秒
 
-                // 处理分钟间隔 (如 */5)
-                if (minute.startsWith('*/')) {
-                    const interval = parseInt(minute.substring(2));
-                    const currentMinute = now.getMinutes();
-                    const nextMinute = Math.ceil((currentMinute + 1) / interval) * interval;
+                // 根据是否有秒字段来设置初始时间
+                if (cronParts.length === 6) {
+                    next.setMilliseconds(0); // 只重置毫秒
+                } else {
+                    next.setSeconds(0, 0); // 重置秒和毫秒
+                }
 
-                    if (nextMinute >= 60) {
-                        next.setHours(next.getHours() + 1, 0, 0, 0);
+                // 处理秒级间隔 (如 */5 * * * * *)
+                if (cronParts.length === 6 && second.startsWith('*/')) {
+                    const interval = parseInt(second.substring(2));
+                    const currentSecond = now.getSeconds();
+                    const nextSecond = Math.ceil((currentSecond + 1) / interval) * interval;
+
+                    if (nextSecond >= 60) {
+                        next.setMinutes(next.getMinutes() + 1, 0, 0);
                     } else {
-                        next.setMinutes(nextMinute, 0, 0);
+                        next.setSeconds(nextSecond, 0);
                     }
 
                     return this.formatDateTime(next);
                 }
 
-                // 处理小时间隔 (如 0 */2 * * *)
+                // 处理分钟间隔 (如 */5 或 30 */10 * * * *)
+                if (minute.startsWith('*/')) {
+                    const interval = parseInt(minute.substring(2));
+                    const currentMinute = now.getMinutes();
+                    const currentSecond = now.getSeconds();
+
+                    // 计算下一个符合间隔的分钟
+                    let nextMinute = Math.ceil((currentMinute + 1) / interval) * interval;
+
+                    // 如果是6字段格式且指定了具体秒数
+                    if (cronParts.length === 6 && second !== '*' && !second.startsWith('*/')) {
+                        const targetSecond = parseInt(second);
+
+                        // 如果当前分钟符合间隔且还没到目标秒数，就在当前分钟执行
+                        if (currentMinute % interval === 0 && currentSecond < targetSecond) {
+                            next.setSeconds(targetSecond, 0);
+                            return this.formatDateTime(next);
+                        }
+
+                        // 否则计算下一个符合间隔的分钟
+                        nextMinute = Math.ceil((currentMinute + 1) / interval) * interval;
+
+                        if (nextMinute >= 60) {
+                            next.setHours(next.getHours() + 1, 0, targetSecond, 0);
+                        } else {
+                            next.setMinutes(nextMinute, targetSecond, 0);
+                        }
+                    } else {
+                        // 传统5字段格式或6字段但秒为*
+                        if (nextMinute >= 60) {
+                            next.setHours(next.getHours() + 1, 0, 0, 0);
+                        } else {
+                            next.setMinutes(nextMinute, 0, 0);
+                        }
+                    }
+
+                    return this.formatDateTime(next);
+                }
+
+                // 处理小时间隔 (如 0 */2 * * * 或 30 0 */2 * * *)
                 if (hour.startsWith('*/') && minute !== '*') {
                     const hourInterval = parseInt(hour.substring(2));
                     const targetMinute = parseInt(minute);
+                    let targetSecond = 0;
+
+                    // 如果是6字段格式且指定了具体秒数
+                    if (cronParts.length === 6 && second !== '*' && !second.startsWith('*/')) {
+                        targetSecond = parseInt(second);
+                    }
+
                     const currentHour = now.getHours();
                     let nextHour = Math.ceil((currentHour + 1) / hourInterval) * hourInterval;
 
@@ -1474,16 +1710,23 @@ function app() {
                         nextHour = 0;
                     }
 
-                    next.setHours(nextHour, targetMinute, 0, 0);
+                    next.setHours(nextHour, targetMinute, targetSecond, 0);
                     return this.formatDateTime(next);
                 }
 
-                // 处理每小时执行 (如 30 * * * *)
+                // 处理每小时执行 (如 30 * * * * 或 30 30 * * * *)
                 if (minute !== '*' && hour === '*') {
                     const targetMinute = parseInt(minute);
-                    next.setMinutes(targetMinute, 0, 0);
+                    let targetSecond = 0;
 
-                    // 如果当前时间已经过了这个分钟，设置为下一小时
+                    // 如果是6字段格式且指定了具体秒数
+                    if (cronParts.length === 6 && second !== '*' && !second.startsWith('*/')) {
+                        targetSecond = parseInt(second);
+                    }
+
+                    next.setMinutes(targetMinute, targetSecond, 0);
+
+                    // 如果当前时间已经过了这个时间点，设置为下一小时
                     if (next <= now) {
                         next.setHours(next.getHours() + 1);
                     }
@@ -1491,12 +1734,18 @@ function app() {
                     return this.formatDateTime(next);
                 }
 
-                // 处理每天执行 (如 30 14 * * *)
+                // 处理每天执行 (如 30 14 * * * 或 30 30 14 * * *)
                 if (minute !== '*' && hour !== '*' && day === '*' && weekday === '*') {
                     const targetMinute = parseInt(minute);
                     const targetHour = parseInt(hour);
+                    let targetSecond = 0;
 
-                    next.setHours(targetHour, targetMinute, 0, 0);
+                    // 如果是6字段格式且指定了具体秒数
+                    if (cronParts.length === 6 && second !== '*' && !second.startsWith('*/')) {
+                        targetSecond = parseInt(second);
+                    }
+
+                    next.setHours(targetHour, targetMinute, targetSecond, 0);
 
                     // 如果今天的时间已经过了，设置为明天
                     if (next <= now) {
@@ -1506,13 +1755,19 @@ function app() {
                     return this.formatDateTime(next);
                 }
 
-                // 处理每周执行 (如 0 9 * * 1)
+                // 处理每周执行 (如 0 9 * * 1 或 30 0 9 * * 1)
                 if (minute !== '*' && hour !== '*' && weekday !== '*' && day === '*') {
                     const targetMinute = parseInt(minute);
                     const targetHour = parseInt(hour);
                     const targetWeekday = parseInt(weekday);
+                    let targetSecond = 0;
 
-                    next.setHours(targetHour, targetMinute, 0, 0);
+                    // 如果是6字段格式且指定了具体秒数
+                    if (cronParts.length === 6 && second !== '*' && !second.startsWith('*/')) {
+                        targetSecond = parseInt(second);
+                    }
+
+                    next.setHours(targetHour, targetMinute, targetSecond, 0);
 
                     // 计算到目标星期几的天数
                     const currentWeekday = next.getDay();
@@ -1526,13 +1781,19 @@ function app() {
                     return this.formatDateTime(next);
                 }
 
-                // 处理每月执行 (如 0 9 15 * *)
+                // 处理每月执行 (如 0 9 15 * * 或 30 0 9 15 * *)
                 if (minute !== '*' && hour !== '*' && day !== '*' && month === '*') {
                     const targetMinute = parseInt(minute);
                     const targetHour = parseInt(hour);
                     const targetDay = parseInt(day);
+                    let targetSecond = 0;
 
-                    next.setHours(targetHour, targetMinute, 0, 0);
+                    // 如果是6字段格式且指定了具体秒数
+                    if (cronParts.length === 6 && second !== '*' && !second.startsWith('*/')) {
+                        targetSecond = parseInt(second);
+                    }
+
+                    next.setHours(targetHour, targetMinute, targetSecond, 0);
                     next.setDate(targetDay);
 
                     // 如果这个月的日期已经过了，设置为下个月
@@ -2326,6 +2587,313 @@ function app() {
             this.copyToClipboard(path, '文件路径已复制到剪贴板');
         },
 
+        // 脚本调试相关方法
+        async startDebugScript(file) {
+            try {
+                // 读取脚本内容
+                const response = await fetch(`/api/files/read?path=${encodeURIComponent(file.path)}`, {
+                    headers: {
+                        'Authorization': `Bearer ${this.token}`
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error('读取脚本文件失败');
+                }
+
+                const data = await response.json();
+
+                // 进入调试模式
+                this.debugMode = {
+                    active: true,
+                    scriptPath: file.path,
+                    scriptName: file.name,
+                    content: data.content,
+                    output: [],
+                    status: 'idle',
+                    debugId: null,
+                    saving: false,
+                    running: false,
+                    editor: null
+                };
+
+                // 延迟初始化CodeMirror，确保DOM已渲染
+                this.$nextTick(() => {
+                    this.initCodeEditor(file.name);
+                });
+
+                this.showToast(`已进入调试模式: ${file.name}`, 'success');
+            } catch (error) {
+                console.error('启动调试失败:', error);
+                this.showToast('启动调试失败: ' + error.message, 'error');
+            }
+        },
+
+        async saveDebugScript() {
+            if (this.debugMode.saving) return;
+
+            this.debugMode.saving = true;
+            try {
+                // 从CodeMirror编辑器获取最新内容
+                let content = this.debugMode.content;
+                if (this.debugMode.editor) {
+                    content = this.debugMode.editor.getValue();
+                    this.debugMode.content = content;
+                }
+
+                const response = await fetch('/api/files/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${this.token}`
+                    },
+                    body: JSON.stringify({
+                        path: this.debugMode.scriptPath,
+                        content: content
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('保存文件失败');
+                }
+
+                this.showToast('文件保存成功', 'success');
+            } catch (error) {
+                console.error('保存文件失败:', error);
+                this.showToast('保存文件失败: ' + error.message, 'error');
+            } finally {
+                this.debugMode.saving = false;
+            }
+        },
+
+        async runDebugScript() {
+            if (this.debugMode.running) return;
+
+            this.debugMode.running = true;
+            this.debugMode.status = 'running';
+            this.debugMode.output = [];
+
+            try {
+                const response = await fetch('/api/files/debug-script', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${this.token}`
+                    },
+                    body: JSON.stringify({
+                        script_path: this.debugMode.scriptPath
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('启动脚本执行失败');
+                }
+
+                const data = await response.json();
+                this.debugMode.debugId = data.debug_id;
+                this.showToast('脚本开始执行', 'success');
+            } catch (error) {
+                console.error('运行脚本失败:', error);
+                this.showToast('运行脚本失败: ' + error.message, 'error');
+                this.debugMode.status = 'error';
+                this.debugMode.running = false;
+            }
+        },
+
+        closeDebugMode() {
+            // 如果脚本正在运行，询问是否确认关闭
+            if (this.debugMode.running) {
+                if (!confirm('脚本正在运行，确定要关闭调试模式吗？')) {
+                    return;
+                }
+            }
+
+            // 销毁CodeMirror实例
+            this.destroyCodeEditor();
+
+            this.debugMode = {
+                active: false,
+                scriptPath: '',
+                scriptName: '',
+                content: '',
+                output: [],
+                status: 'idle',
+                debugId: null,
+                saving: false,
+                running: false,
+                editor: null
+            };
+        },
+
+        clearDebugOutput() {
+            this.debugMode.output = [];
+        },
+
+        // 初始化代码编辑器
+        initCodeEditor(fileName) {
+            const editorElement = document.getElementById('code-editor');
+            if (!editorElement) {
+                console.error('找不到代码编辑器容器');
+                return;
+            }
+
+            // 检查CodeMirror是否已加载
+            if (typeof CodeMirror === 'undefined') {
+                console.error('CodeMirror未加载，使用普通文本框');
+                this.createFallbackEditor(editorElement);
+                return;
+            }
+
+            // 如果已有编辑器实例，先销毁
+            this.destroyCodeEditor();
+
+            // 根据文件扩展名确定语言模式
+            const fileExt = fileName.toLowerCase().split('.').pop();
+            let mode = 'text/plain';
+            if (fileExt === 'py') {
+                mode = 'python';
+            } else if (fileExt === 'js') {
+                mode = 'javascript';
+            }
+
+            // 清空容器
+            editorElement.innerHTML = '';
+
+            try {
+                // 创建CodeMirror实例
+                this.debugMode.editor = CodeMirror(editorElement, {
+                    value: this.debugMode.content || '',
+                    mode: mode,
+                    theme: 'monokai',
+                    lineNumbers: true,
+                    lineWrapping: true,
+                    autoCloseBrackets: true,
+                    matchBrackets: true,
+                    styleActiveLine: true,
+                    indentUnit: 4,
+                    tabSize: 4,
+                    indentWithTabs: false,
+                    extraKeys: {
+                        'Ctrl-S': () => {
+                            this.saveDebugScript();
+                        },
+                        'Cmd-S': () => {
+                            this.saveDebugScript();
+                        }
+                    }
+                });
+
+                // 监听内容变化
+                this.debugMode.editor.on('change', (editor) => {
+                    this.debugMode.content = editor.getValue();
+                });
+
+                // 设置编辑器高度
+                this.debugMode.editor.setSize('100%', '100%');
+
+                console.log('CodeMirror编辑器初始化成功');
+            } catch (error) {
+                console.error('CodeMirror初始化失败:', error);
+                this.createFallbackEditor(editorElement);
+            }
+        },
+
+        // 创建备用编辑器（普通textarea）
+        createFallbackEditor(container) {
+            container.innerHTML = '';
+            const textarea = document.createElement('textarea');
+            textarea.value = this.debugMode.content || '';
+            textarea.className = 'w-full h-full font-mono text-sm border border-gray-300 rounded-md p-3 resize-none';
+            textarea.placeholder = '脚本内容加载中...';
+
+            // 监听内容变化
+            textarea.addEventListener('input', (e) => {
+                this.debugMode.content = e.target.value;
+            });
+
+            container.appendChild(textarea);
+
+            // 创建一个模拟的编辑器对象
+            this.debugMode.editor = {
+                getValue: () => textarea.value,
+                setValue: (value) => {
+                    textarea.value = value;
+                    this.debugMode.content = value;
+                },
+                // 模拟toTextArea方法
+                toTextArea: () => {
+                    // 什么都不做，因为已经是textarea了
+                }
+            };
+
+            console.log('使用备用文本编辑器');
+        },
+
+        // 销毁代码编辑器
+        destroyCodeEditor() {
+            if (this.debugMode.editor) {
+                try {
+                    // 检查是否有toTextArea方法
+                    if (typeof this.debugMode.editor.toTextArea === 'function') {
+                        this.debugMode.editor.toTextArea();
+                    } else {
+                        // 如果没有toTextArea方法，直接清空容器
+                        const editorElement = document.getElementById('code-editor');
+                        if (editorElement) {
+                            editorElement.innerHTML = '';
+                        }
+                    }
+                } catch (error) {
+                    console.error('销毁CodeMirror编辑器时出错:', error);
+                    // 强制清空容器
+                    const editorElement = document.getElementById('code-editor');
+                    if (editorElement) {
+                        editorElement.innerHTML = '';
+                    }
+                }
+                this.debugMode.editor = null;
+            }
+        },
+
+        // 处理调试输出
+        handleDebugOutput(message) {
+            if (message.debug_id === this.debugMode.debugId) {
+                const data = message.data;
+
+                if (data.type === 'output') {
+                    // 将stream名称转换为中文
+                    const streamName = data.stream === 'stdout' ? '输出' :
+                                     data.stream === 'stderr' ? '错误' : data.stream;
+                    const outputLine = `[${streamName}] ${data.content}`;
+
+                    // 防止重复添加相同的输出行
+                    const lastLine = this.debugMode.output[this.debugMode.output.length - 1];
+                    if (lastLine !== outputLine) {
+                        this.debugMode.output.push(outputLine);
+                        // 自动滚动到底部
+                        this.$nextTick(() => {
+                            const outputElement = this.$refs.debugOutput;
+                            if (outputElement) {
+                                outputElement.scrollTop = outputElement.scrollHeight;
+                            }
+                        });
+                    }
+                } else if (data.type === 'completed') {
+                    this.debugMode.status = 'completed';
+                    this.debugMode.running = false;
+                    const completedMessage = `\n[系统] 脚本执行完成，退出码: ${data.return_code}`;
+                    // 防止重复添加完成消息
+                    if (!this.debugMode.output.includes(completedMessage.trim())) {
+                        this.debugMode.output.push(completedMessage);
+                    }
+                } else if (data.type === 'error') {
+                    this.debugMode.status = 'error';
+                    this.debugMode.running = false;
+                    this.debugMode.output.push(`\n[错误] ${data.content}`);
+                }
+            }
+        },
+
         startRename(file) {
             this.renameForm.file = file;
             this.renameForm.newName = file.name;
@@ -2997,11 +3565,59 @@ function app() {
                 this.systemInfo = await this.apiRequest('/api/settings/system-info');
                 // 同时加载时区配置
                 await this.loadTimezoneConfig();
+                // 启动动态时间更新
+                this.startTimeUpdate();
             } catch (error) {
                 console.error('加载系统信息失败:', error);
             } finally {
                 this.systemInfoLoading = false;
             }
+        },
+
+        // 启动动态时间更新
+        startTimeUpdate() {
+            // 清除之前的定时器
+            if (this.timeUpdateInterval) {
+                clearInterval(this.timeUpdateInterval);
+            }
+
+            // 初始化当前时间
+            if (this.systemInfo && this.systemInfo.timezone_info) {
+                // 解析服务器时间
+                const serverTime = new Date(this.systemInfo.timezone_info.current_time);
+                this.currentTime = {
+                    local: serverTime,
+                    utc: new Date(this.systemInfo.timezone_info.utc_time)
+                };
+
+                // 每秒更新时间
+                this.timeUpdateInterval = setInterval(() => {
+                    this.currentTime.local = new Date(this.currentTime.local.getTime() + 1000);
+                    this.currentTime.utc = new Date(this.currentTime.utc.getTime() + 1000);
+                }, 1000);
+            }
+        },
+
+        // 停止时间更新
+        stopTimeUpdate() {
+            if (this.timeUpdateInterval) {
+                clearInterval(this.timeUpdateInterval);
+                this.timeUpdateInterval = null;
+            }
+        },
+
+        // 格式化动态时间显示
+        formatDynamicTime(time) {
+            if (!time) return '加载中...';
+            return time.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            });
         },
 
         // 配色方案管理方法
@@ -3114,6 +3730,11 @@ function app() {
 
         // 页面切换时加载数据
         async switchPage(page) {
+            // 如果离开设置页面，停止时间更新
+            if (this.currentPage === 'settings' && page !== 'settings') {
+                this.stopTimeUpdate();
+            }
+
             this.currentPage = page;
             this.mobileMenuOpen = false; // 关闭移动端菜单
 
@@ -3232,6 +3853,56 @@ function app() {
             }
         },
 
+        // 加载通知设置页面的任务列表（分页）
+        async loadNotificationTasks(page = 1) {
+            this.tasksLoading = true;
+            try {
+                // 构建查询参数
+                const params = new URLSearchParams({
+                    page: page,
+                    page_size: this.notificationTasksPagination.pageSize
+                });
+
+                const response = await this.apiRequest(`/api/tasks/?${params}`);
+                this.notificationTasks = response.tasks;
+                this.notificationTasksPagination = {
+                    page: response.page,
+                    pageSize: response.page_size,
+                    total: response.total,
+                    totalPages: response.total_pages
+                };
+
+                // 为没有配置的任务初始化默认配置
+                this.notificationTasks.forEach(task => {
+                    if (!this.taskNotificationConfigs[task.id]) {
+                        this.taskNotificationConfigs[task.id] = {
+                            notification_type: '',
+                            error_only: false,
+                            keywords: ''
+                        };
+                    }
+                });
+            } catch (error) {
+                console.error('加载通知任务列表失败:', error);
+                this.notificationTasks = [];
+                this.notificationTasksPagination = {
+                    page: 1,
+                    pageSize: 20,
+                    total: 0,
+                    totalPages: 0
+                };
+            } finally {
+                this.tasksLoading = false;
+            }
+        },
+
+        // 通知设置页面的分页跳转
+        async goToNotificationTaskPage(page) {
+            if (page >= 1 && page <= this.notificationTasksPagination.totalPages) {
+                await this.loadNotificationTasks(page);
+            }
+        },
+
         async loadTaskNotificationConfigs() {
             try {
                 const configs = await this.apiRequest('/api/notifications/task-configs');
@@ -3244,21 +3915,8 @@ function app() {
                     };
                 });
 
-                // 确保任务数据已加载
-                if (this.tasks.length === 0) {
-                    await this.loadTasks();
-                }
-
-                // 为没有配置的任务初始化默认配置
-                this.tasks.forEach(task => {
-                    if (!this.taskNotificationConfigs[task.id]) {
-                        this.taskNotificationConfigs[task.id] = {
-                            notification_type: '',
-                            error_only: false,
-                            keywords: ''
-                        };
-                    }
-                });
+                // 加载通知设置页面的任务列表
+                await this.loadNotificationTasks();
             } catch (error) {
                 console.error('加载任务通知配置失败:', error);
                 this.taskNotificationConfigs = {};
@@ -3272,6 +3930,7 @@ function app() {
                 'wxpusher': 'WxPusher',
                 'telegram': 'Telegram机器人',
                 'wecom': '企业微信',
+                'wecom_app': '企微应用通知',
                 'serverchan': 'Server酱',
                 'dingtalk': '钉钉机器人',
                 'bark': 'Bark'
@@ -3533,7 +4192,16 @@ function app() {
                     body: JSON.stringify(requestData)
                 });
                 this.showToast('任务通知配置保存成功', 'success');
-                await this.loadTaskNotificationConfigs();
+                // 重新加载通知配置，但不重新加载任务列表（避免分页重置）
+                const configs = await this.apiRequest('/api/notifications/task-configs');
+                this.taskNotificationConfigs = {};
+                configs.forEach(config => {
+                    this.taskNotificationConfigs[config.task_id] = {
+                        notification_type: config.notification_type || '',
+                        error_only: config.error_only || false,
+                        keywords: config.keywords || ''
+                    };
+                });
             } catch (error) {
                 console.error('保存任务通知配置失败:', error);
             }
@@ -3578,29 +4246,56 @@ function app() {
         // Cron表达式生成器相关方法
         resetCronForm() {
             this.cronForm = {
+                second: '0',
                 minute: '*',
                 hour: '*',
                 day: '*',
                 month: '*',
                 weekday: '*'
             };
+            this.enableSeconds = false;
             this.generatedCron = '* * * * *';
         },
 
         updateCronExpression() {
-            this.generatedCron = `${this.cronForm.minute} ${this.cronForm.hour} ${this.cronForm.day} ${this.cronForm.month} ${this.cronForm.weekday}`;
+            if (this.enableSeconds) {
+                this.generatedCron = `${this.cronForm.second} ${this.cronForm.minute} ${this.cronForm.hour} ${this.cronForm.day} ${this.cronForm.month} ${this.cronForm.weekday}`;
+            } else {
+                this.generatedCron = `${this.cronForm.minute} ${this.cronForm.hour} ${this.cronForm.day} ${this.cronForm.month} ${this.cronForm.weekday}`;
+            }
         },
 
         applyCronTemplate(cronExpression) {
             const parts = cronExpression.split(' ');
             if (parts.length === 5) {
+                // 5字段格式（传统格式）
+                this.cronForm.second = '0';
                 this.cronForm.minute = parts[0];
                 this.cronForm.hour = parts[1];
                 this.cronForm.day = parts[2];
                 this.cronForm.month = parts[3];
                 this.cronForm.weekday = parts[4];
+                this.enableSeconds = false;
+                this.generatedCron = cronExpression;
+            } else if (parts.length === 6) {
+                // 6字段格式（包含秒）
+                this.cronForm.second = parts[0];
+                this.cronForm.minute = parts[1];
+                this.cronForm.hour = parts[2];
+                this.cronForm.day = parts[3];
+                this.cronForm.month = parts[4];
+                this.cronForm.weekday = parts[5];
+                this.enableSeconds = true;
                 this.generatedCron = cronExpression;
             }
+        },
+
+        toggleSecondsMode() {
+            this.enableSeconds = !this.enableSeconds;
+            if (!this.enableSeconds) {
+                this.cronForm.second = '0';
+            }
+            this.updateCronExpression();
         },
 
         applyCronExpression() {
@@ -3718,6 +4413,37 @@ function app() {
 
         closeVersionModal() {
             this.showVersionModal = false;
+        },
+
+        async showVersionHistoryModal() {
+            this.showVersionHistoryModalVisible = true;
+            await this.loadVersionHistory();
+        },
+
+        closeVersionHistoryModal() {
+            this.showVersionHistoryModalVisible = false;
+        },
+
+        async loadVersionHistory() {
+            this.versionHistoryLoading = true;
+            try {
+                const response = await fetch('/api/settings/version-history', {
+                    headers: {
+                        'Authorization': `Bearer ${this.token}`
+                    }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    this.versionHistory = data.versions || [];
+                } else {
+                    this.showToast('获取版本历史失败', 'error');
+                }
+            } catch (error) {
+                console.error('获取版本历史失败:', error);
+                this.showToast('获取版本历史失败', 'error');
+            } finally {
+                this.versionHistoryLoading = false;
+            }
         },
 
         // 判断当前版本是否大于最新版本

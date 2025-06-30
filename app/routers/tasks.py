@@ -70,18 +70,76 @@ class GroupRenameRequest(BaseModel):
 class GroupDeleteRequest(BaseModel):
     group_name: str
 
+class GroupCreateRequest(BaseModel):
+    group_name: str
+
 def validate_cron_expression(cron_expr: str) -> bool:
-    """验证cron表达式格式"""
+    """验证cron表达式格式，支持5字段和6字段（包含秒）格式"""
     parts = cron_expr.split()
-    if len(parts) != 5:
+
+    # 支持5字段（传统格式）和6字段（包含秒）格式
+    if len(parts) not in [5, 6]:
         return False
-    
-    # 简单验证每个部分
+
+    # 验证每个部分的基本格式
     for part in parts:
         if not (part == '*' or part.isdigit() or '/' in part or '-' in part or ',' in part):
             return False
-    
+
+    # 如果是6字段格式，验证秒字段（第一个字段）的范围
+    if len(parts) == 6:
+        seconds_part = parts[0]
+        if seconds_part != '*' and not _validate_cron_field_range(seconds_part, 0, 59):
+            return False
+
     return True
+
+def _validate_cron_field_range(field: str, min_val: int, max_val: int) -> bool:
+    """验证cron字段的数值范围"""
+    try:
+        # 处理简单数字
+        if field.isdigit():
+            val = int(field)
+            return min_val <= val <= max_val
+
+        # 处理逗号分隔的多个值
+        if ',' in field:
+            for part in field.split(','):
+                if not _validate_cron_field_range(part.strip(), min_val, max_val):
+                    return False
+            return True
+
+        # 处理范围表达式 (如 0-30)
+        if '-' in field and '/' not in field:
+            start, end = field.split('-', 1)
+            if start.isdigit() and end.isdigit():
+                start_val, end_val = int(start), int(end)
+                return min_val <= start_val <= end_val <= max_val
+
+        # 处理步长表达式 (如 */5 或 0-30/5)
+        if '/' in field:
+            base, step = field.split('/', 1)
+            if not step.isdigit():
+                return False
+
+            step_val = int(step)
+            if step_val <= 0 or step_val > max_val:
+                return False
+
+            if base == '*':
+                return True
+            elif base.isdigit():
+                val = int(base)
+                return min_val <= val <= max_val
+            elif '-' in base:
+                start, end = base.split('-', 1)
+                if start.isdigit() and end.isdigit():
+                    start_val, end_val = int(start), int(end)
+                    return min_val <= start_val <= end_val <= max_val
+
+        return True
+    except (ValueError, IndexError):
+        return False
 
 @router.post("/", response_model=TaskResponse)
 async def create_task(
@@ -148,6 +206,9 @@ async def get_tasks(
     # 构建查询
     query = db.query(Task)
 
+    # 过滤掉占位任务（以__GROUP_PLACEHOLDER_开头的任务）
+    query = query.filter(~Task.name.like('__GROUP_PLACEHOLDER_%'))
+
     # 按分组过滤
     if group_name:
         query = query.filter(Task.group_name == group_name)
@@ -200,14 +261,53 @@ async def get_task_groups(
 
     return TaskGroupsResponse(groups=group_names)
 
+@router.post("/groups/create")
+async def create_task_group(
+    create_data: GroupCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """创建新的任务分组"""
+    group_name = create_data.group_name.strip()
+
+    # 验证输入
+    if not group_name:
+        raise HTTPException(status_code=400, detail="分组名称不能为空")
+
+    # 检查分组名称是否已存在
+    existing_group = db.query(Task).filter(Task.group_name == group_name).first()
+    if existing_group:
+        raise HTTPException(status_code=400, detail="分组名称已存在")
+
+    # 由于分组是通过任务来管理的，我们需要创建一个占位任务
+    # 这个任务不会被执行，只是为了在数据库中建立分组
+    placeholder_task = Task(
+        name=f"__GROUP_PLACEHOLDER_{group_name}",
+        description=f"分组 '{group_name}' 的占位任务，请勿删除",
+        script_path="# 这是一个占位脚本，用于维护分组结构",
+        script_type="python",
+        cron_expression="0 0 1 1 *",  # 每年1月1日执行（实际不会执行因为is_active=False）
+        group_name=group_name,
+        is_active=False  # 确保不会被执行
+    )
+
+    db.add(placeholder_task)
+    db.commit()
+
+    return {"message": f"分组 '{group_name}' 创建成功"}
+
 @router.get("/stats", response_model=TaskStatsResponse)
 async def get_task_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取任务统计信息"""
-    total_tasks = db.query(Task).count()
-    active_tasks = db.query(Task).filter(Task.is_active == True).count()
+    # 过滤掉占位任务（以__GROUP_PLACEHOLDER_开头的任务）
+    total_tasks = db.query(Task).filter(~Task.name.like('__GROUP_PLACEHOLDER_%')).count()
+    active_tasks = db.query(Task).filter(
+        Task.is_active == True,
+        ~Task.name.like('__GROUP_PLACEHOLDER_%')
+    ).count()
 
     return TaskStatsResponse(
         total_tasks=total_tasks,

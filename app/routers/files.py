@@ -36,6 +36,9 @@ class CreateTextFileRequest(BaseModel):
     content: str
     path: str = ""
 
+class ScriptDebugRequest(BaseModel):
+    script_path: str
+
 SCRIPTS_DIR = "scripts"
 
 def ensure_scripts_dir():
@@ -321,6 +324,89 @@ async def save_file(
         return {"message": f"文件 {save_request.path} 保存成功"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"保存文件失败: {str(e)}")
+
+@router.get("/read")
+async def read_file(path: str, current_user: User = Depends(get_current_user)):
+    """读取文件内容"""
+    full_path = os.path.join(SCRIPTS_DIR, path)
+
+    # 安全检查
+    if not is_safe_path(full_path):
+        raise HTTPException(status_code=400, detail="无效的路径")
+
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    if os.path.isdir(full_path):
+        raise HTTPException(status_code=400, detail="无法读取目录")
+
+    try:
+        # 读取文件内容
+        with open(full_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        return {"content": content, "path": path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取文件失败: {str(e)}")
+
+@router.post("/debug-script")
+async def debug_script(
+    debug_request: ScriptDebugRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """启动脚本调试"""
+    from app.scheduler import task_scheduler
+    from app.database import get_db
+    from sqlalchemy.orm import Session
+    import asyncio
+
+    # 获取数据库会话
+    db = next(get_db())
+
+    try:
+        script_path = debug_request.script_path
+        full_path = os.path.join(SCRIPTS_DIR, script_path)
+
+        # 安全检查
+        if not is_safe_path(full_path):
+            raise HTTPException(status_code=400, detail="无效的路径")
+
+        if not os.path.exists(full_path):
+            raise HTTPException(status_code=404, detail="脚本文件不存在")
+
+        if os.path.isdir(full_path):
+            raise HTTPException(status_code=400, detail="无法调试目录")
+
+        # 检查文件扩展名
+        file_ext = os.path.splitext(script_path)[1].lower()
+        if file_ext not in ['.py', '.js']:
+            raise HTTPException(status_code=400, detail="只支持调试.py和.js文件")
+
+        # 确定脚本类型和命令
+        if file_ext == '.py':
+            script_type = "python"
+            command_key = "python_command"
+        else:
+            script_type = "nodejs"
+            command_key = "nodejs_command"
+
+        # 获取执行命令
+        from app.routers.settings import get_system_config
+        command = get_system_config(db, command_key, "python" if script_type == "python" else "node")
+
+        # 执行脚本调试
+        debug_id = await task_scheduler.debug_script(
+            script_path=script_path,
+            script_type=script_type,
+            command=command,
+            db=db
+        )
+
+        return {"message": "脚本调试已启动", "debug_id": debug_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"启动脚本调试失败: {str(e)}")
+    finally:
+        db.close()
 
 @router.post("/extract")
 async def extract_archive(

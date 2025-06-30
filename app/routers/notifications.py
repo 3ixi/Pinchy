@@ -61,7 +61,7 @@ async def create_notification_config(
 ):
     """创建通知配置"""
     # 验证配置类型
-    supported_types = ["email", "pushplus", "wxpusher", "telegram", "wecom", "serverchan", "dingtalk", "bark"]
+    supported_types = ["email", "pushplus", "wxpusher", "telegram", "wecom", "wecom_app", "serverchan", "dingtalk", "bark"]
     if config_data.name not in supported_types:
         raise HTTPException(status_code=400, detail="不支持的通知类型")
     
@@ -108,7 +108,7 @@ async def update_notification_config(
         raise HTTPException(status_code=404, detail="配置不存在")
 
     # 验证配置类型
-    supported_types = ["email", "pushplus", "wxpusher", "telegram", "wecom", "serverchan", "dingtalk", "bark"]
+    supported_types = ["email", "pushplus", "wxpusher", "telegram", "wecom", "wecom_app", "serverchan", "dingtalk", "bark"]
     if config_data.name not in supported_types:
         raise HTTPException(status_code=400, detail="不支持的通知类型")
 
@@ -312,7 +312,8 @@ def _get_display_name(config_name: str) -> str:
         "pushplus": "PushPlus",
         "wxpusher": "WxPusher",
         "telegram": "Telegram机器人",
-        "wecom": "企业微信",
+        "wecom": "企微WebHook",
+        "wecom_app": "企微应用通知",
         "serverchan": "Server酱",
         "dingtalk": "钉钉机器人",
         "bark": "Bark"
@@ -332,6 +333,8 @@ async def _send_test_notification(config_type: str, config: Dict[str, Any]) -> b
             return await _send_test_telegram(config)
         elif config_type == "wecom":
             return await _send_test_wecom(config)
+        elif config_type == "wecom_app":
+            return await _send_test_wecom_app(config)
         elif config_type == "serverchan":
             return await _send_test_serverchan(config)
         elif config_type == "dingtalk":
@@ -516,6 +519,10 @@ async def send_notification(notification_config: NotificationConfig, title: str,
             return await _send_pushplus_notification(notification_config.config, title, content)
         elif notification_config.name == "wxpusher":
             return await _send_wxpusher_notification(notification_config.config, title, content)
+        elif notification_config.name == "wecom":
+            return await _send_wecom_notification(notification_config.config, title, content)
+        elif notification_config.name == "wecom_app":
+            return await _send_wecom_app_notification(notification_config.config, title, content)
         else:
             print(f"不支持的通知类型: {notification_config.name}")
             return False
@@ -758,7 +765,7 @@ async def _send_test_telegram(config: Dict[str, Any]) -> bool:
 
 
 async def _send_test_wecom(config: Dict[str, Any]) -> bool:
-    """发送测试企业微信通知"""
+    """发送测试企业微信WebHook通知"""
     try:
         webhook_url = config.get("webhook_url")
 
@@ -1008,4 +1015,221 @@ async def _send_test_bark(config: Dict[str, Any]) -> bool:
 
     except Exception as e:
         print(f"发送测试Bark通知失败: {e}")
+        return False
+
+
+async def _send_test_wecom_app(config: Dict[str, Any]) -> bool:
+    """发送测试企业微信应用通知"""
+    try:
+        corp_id = config.get("corp_id")
+        corp_secret = config.get("corp_secret")
+        agent_id = config.get("agent_id")
+        to_user = config.get("to_user", "@all")
+
+        if not corp_id or not corp_secret or not agent_id:
+            print("企业微信应用配置不完整")
+            return False
+
+        # 第一步：获取access_token
+        token_url = f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corp_id}&corpsecret={corp_secret}"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(token_url, timeout=10) as response:
+                token_result = await response.json()
+                if token_result.get("errcode") != 0:
+                    print(f"获取企业微信access_token失败: {token_result}")
+                    return False
+
+                access_token = token_result.get("access_token")
+                if not access_token:
+                    print("企业微信access_token为空")
+                    return False
+
+            # 第二步：发送消息
+            send_url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}"
+
+            # 构建测试消息
+            title = "Pinchy系统 - 企业微信应用通知测试"
+            content = f"""📱 Pinchy系统企业微信应用通知测试
+
+✅ 如果您收到这条消息，说明企业微信应用通知配置成功！
+
+📋 配置信息：
+• 企业ID: {corp_id}
+• 应用ID: {agent_id}
+• 接收用户: {to_user}
+
+⏰ 测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+🎉 您现在可以正常接收任务执行通知了！"""
+
+            # 获取用户配置的消息类型，默认为text
+            msg_type = config.get("msg_type", "text")
+
+            if msg_type == "text":
+                message_data = {
+                    "touser": to_user,
+                    "msgtype": "text",
+                    "agentid": agent_id,
+                    "text": {
+                        "content": f"{title}\n\n{content}"
+                    }
+                }
+            elif msg_type == "markdown":
+                message_data = {
+                    "touser": to_user,
+                    "msgtype": "markdown",
+                    "agentid": agent_id,
+                    "markdown": {
+                        "content": f"## {title}\n\n{content}"
+                    }
+                }
+            else:
+                # 默认使用text类型
+                message_data = {
+                    "touser": to_user,
+                    "msgtype": "text",
+                    "agentid": agent_id,
+                    "text": {
+                        "content": f"{title}\n\n{content}"
+                    }
+                }
+
+            async with session.post(send_url, json=message_data, timeout=10) as response:
+                result = await response.json()
+                if result.get("errcode") == 0:
+                    print(f"测试企业微信应用通知发送成功: {result}")
+                    return True
+                else:
+                    print(f"企业微信应用发送失败: {result}")
+                    return False
+
+    except Exception as e:
+        print(f"发送测试企业微信应用通知失败: {e}")
+        return False
+
+
+async def _send_wecom_notification(config: Dict[str, Any], title: str, content: str) -> bool:
+    """发送企业微信WebHook通知"""
+    try:
+        webhook_url = config.get("webhook_url")
+
+        if not webhook_url:
+            print("企业微信webhook_url未配置")
+            return False
+
+        # 获取用户配置的消息类型，默认为text
+        msg_type = config.get("msg_type", "text")
+
+        if msg_type == "text":
+            data = {
+                "msgtype": "text",
+                "text": {
+                    "content": f"{title}\n\n{content}"
+                }
+            }
+        elif msg_type == "markdown":
+            data = {
+                "msgtype": "markdown",
+                "markdown": {
+                    "content": f"## {title}\n\n{content}"
+                }
+            }
+        else:
+            # 默认使用text类型
+            data = {
+                "msgtype": "text",
+                "text": {
+                    "content": f"{title}\n\n{content}"
+                }
+            }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(webhook_url, json=data, timeout=10) as response:
+                result = await response.json()
+                if result.get("errcode") == 0:
+                    print(f"企业微信WebHook通知发送成功")
+                    return True
+                else:
+                    print(f"企业微信WebHook发送失败: {result}")
+                    return False
+
+    except Exception as e:
+        print(f"发送企业微信WebHook通知失败: {e}")
+        return False
+
+
+async def _send_wecom_app_notification(config: Dict[str, Any], title: str, content: str) -> bool:
+    """发送企业微信应用通知"""
+    try:
+        corp_id = config.get("corp_id")
+        corp_secret = config.get("corp_secret")
+        agent_id = config.get("agent_id")
+        to_user = config.get("to_user", "@all")
+
+        if not corp_id or not corp_secret or not agent_id:
+            print("企业微信应用配置不完整")
+            return False
+
+        # 第一步：获取access_token
+        token_url = f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corp_id}&corpsecret={corp_secret}"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(token_url, timeout=10) as response:
+                token_result = await response.json()
+                if token_result.get("errcode") != 0:
+                    print(f"获取企业微信access_token失败: {token_result}")
+                    return False
+
+                access_token = token_result.get("access_token")
+                if not access_token:
+                    print("企业微信access_token为空")
+                    return False
+
+            # 第二步：发送消息
+            send_url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}"
+
+            # 获取用户配置的消息类型，默认为text
+            msg_type = config.get("msg_type", "text")
+
+            if msg_type == "text":
+                message_data = {
+                    "touser": to_user,
+                    "msgtype": "text",
+                    "agentid": agent_id,
+                    "text": {
+                        "content": f"{title}\n\n{content}"
+                    }
+                }
+            elif msg_type == "markdown":
+                message_data = {
+                    "touser": to_user,
+                    "msgtype": "markdown",
+                    "agentid": agent_id,
+                    "markdown": {
+                        "content": f"## {title}\n\n{content}"
+                    }
+                }
+            else:
+                # 默认使用text类型
+                message_data = {
+                    "touser": to_user,
+                    "msgtype": "text",
+                    "agentid": agent_id,
+                    "text": {
+                        "content": f"{title}\n\n{content}"
+                    }
+                }
+
+            async with session.post(send_url, json=message_data, timeout=10) as response:
+                result = await response.json()
+                if result.get("errcode") == 0:
+                    print(f"企业微信应用通知发送成功")
+                    return True
+                else:
+                    print(f"企业微信应用发送失败: {result}")
+                    return False
+
+    except Exception as e:
+        print(f"发送企业微信应用通知失败: {e}")
         return False

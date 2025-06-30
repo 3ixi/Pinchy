@@ -8,6 +8,18 @@
     <link rel="stylesheet" href="/static/css/tailwind.min.css">
     <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+    <!-- CodeMirror CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/monokai.min.css">
+
+    <!-- CodeMirror JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
 </head>
 <body class="bg-gray-100 font-sans theme-blue" x-data="app()" x-init="init()">
     <!-- Toast 容器 -->
@@ -151,7 +163,7 @@
                 <!-- 底部信息 -->
                 <div class="text-center mt-8">
                     <p class="text-sm text-gray-500">
-                        © 2025 Pinchy. 专业的脚本调度管理解决方案
+                        © 2025 Pinchy. Python/Node.JS脚本调度执行系统
                     </p>
                 </div>
             </div>
@@ -370,58 +382,58 @@
 
                 <!-- 任务管理页面 -->
                 <div x-show="currentPage === 'tasks'" x-cloak>
-                    <div class="mb-6">
+                    <div class="mb-6 flex gap-3">
                         <button @click="showTaskModal = true; editingTask = null; resetTaskForm()"
                                 class="btn-primary text-white px-4 py-2 rounded-lg flex items-center">
                             <i class="fas fa-plus mr-2"></i>
                             创建任务
+                        </button>
+                        <button @click="refreshTaskData()"
+                                class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg flex items-center transition-colors">
+                            <i class="fas fa-sync-alt mr-2"></i>
+                            刷新列表
                         </button>
                     </div>
 
                     <!-- 任务分组标签 -->
                     <div class="bg-white rounded-lg shadow mb-4" @click.away="closeGroupDropdown()">
                         <div class="px-6 py-4">
-                            <div class="flex flex-wrap gap-2">
+                            <div class="flex gap-2 overflow-x-auto pb-2" style="scrollbar-width: thin; scrollbar-color: #cbd5e0 #f7fafc;">
+                                <style>
+                                    .flex.gap-2.overflow-x-auto::-webkit-scrollbar {
+                                        height: 4px;
+                                    }
+                                    .flex.gap-2.overflow-x-auto::-webkit-scrollbar-track {
+                                        background: #f7fafc;
+                                        border-radius: 2px;
+                                    }
+                                    .flex.gap-2.overflow-x-auto::-webkit-scrollbar-thumb {
+                                        background: #cbd5e0;
+                                        border-radius: 2px;
+                                    }
+                                    .flex.gap-2.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+                                        background: #a0aec0;
+                                    }
+                                </style>
                                 <button @click="switchTaskGroup('all')"
-                                        :class="currentTaskGroup === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
-                                        class="px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                                        :class="currentTaskGroup === 'all' ? 'btn-primary text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
+                                        class="px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap">
                                     全部 (<span x-text="taskPagination.total"></span>)
                                 </button>
                                 <template x-for="group in taskGroups" :key="group">
                                     <div class="relative">
                                         <div class="flex items-center">
                                             <button @click="switchTaskGroup(group)"
-                                                    :class="currentTaskGroup === group ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
-                                                    class="px-4 py-2 rounded-l-lg text-sm font-medium transition-colors"
+                                                    :class="currentTaskGroup === group ? 'btn-primary text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
+                                                    class="px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap"
                                                     x-text="group">
                                             </button>
-                                            <button @click="toggleGroupDropdown(group)"
-                                                    :class="currentTaskGroup === group ? 'bg-blue-500 text-white hover:bg-blue-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
-                                                    class="px-2 py-2 rounded-r-lg text-sm transition-colors border-l border-gray-300">
+                                            <button @click="toggleGroupDropdown(group, $event)"
+                                                    :class="currentTaskGroup === group ? 'btn-primary text-white hover:opacity-90' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
+                                                    class="px-2 py-2 text-sm transition-colors border-l border-gray-300"
+                                                    :id="'group-dropdown-btn-' + group">
                                                 <i class="fas fa-chevron-down text-xs"></i>
                                             </button>
-                                        </div>
-                                        <!-- 下拉菜单 -->
-                                        <div x-show="activeGroupDropdown === group"
-                                             x-transition:enter="transition ease-out duration-100"
-                                             x-transition:enter-start="transform opacity-0 scale-95"
-                                             x-transition:enter-end="transform opacity-100 scale-100"
-                                             x-transition:leave="transition ease-in duration-75"
-                                             x-transition:leave-start="transform opacity-100 scale-100"
-                                             x-transition:leave-end="transform opacity-0 scale-95"
-                                             class="absolute top-full left-0 mt-1 w-32 bg-white rounded-md shadow-lg border border-gray-200 z-10">
-                                            <div class="py-1">
-                                                <button @click="showRenameGroupModal(group)"
-                                                        class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center">
-                                                    <i class="fas fa-edit mr-2"></i>
-                                                    重命名
-                                                </button>
-                                                <button @click="showDeleteGroupModal(group)"
-                                                        class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center">
-                                                    <i class="fas fa-trash mr-2"></i>
-                                                    删除
-                                                </button>
-                                            </div>
                                         </div>
                                     </div>
                                 </template>
@@ -505,14 +517,14 @@
                                                 <!-- 运行/停止按钮 -->
                                                 <button x-show="!runningTasks.has(task.id)"
                                                         @click="runTask(task)"
-                                                        class="text-green-600 hover:text-green-900">运行</button>
+                                                        class="link-primary">运行</button>
                                                 <button x-show="runningTasks.has(task.id)"
                                                         @click="showStopTaskModal(task)"
-                                                        class="text-red-600 hover:text-red-900">停止</button>
+                                                        class="link-primary">停止</button>
 
-                                                <button @click="viewTaskLogs(task)" class="text-purple-600 hover:text-purple-900">日志</button>
+                                                <button @click="viewTaskLogs(task)" class="link-primary">日志</button>
                                                 <button @click="editTask(task)" class="link-primary">编辑</button>
-                                                <button @click="deleteTask(task)" class="text-red-600 hover:text-red-900">删除</button>
+                                                <button @click="deleteTask(task)" class="link-primary">删除</button>
                                             </td>
                                         </tr>
                                     </template>
@@ -572,7 +584,9 @@
 
                 <!-- 文件管理页面 -->
                 <div x-show="currentPage === 'files'" x-cloak>
-                    <div class="mb-6 flex flex-col sm:flex-row gap-4">
+                    <!-- 普通文件管理模式 -->
+                    <div x-show="!debugMode.active">
+                        <div class="mb-6 flex flex-col sm:flex-row gap-4">
                         <button @click="showUploadModal = true"
                                 class="btn-primary text-white px-4 py-2 rounded-lg flex items-center justify-center">
                             <i class="fas fa-upload mr-2"></i>
@@ -661,10 +675,19 @@
                                                         <i x-show="!file.is_directory && getFileIcon(file.name) === 'file'" class="fas fa-file text-gray-500 text-lg"></i>
                                                     </div>
                                                     <div class="text-sm font-medium text-gray-900">
-                                                        <button x-show="file.is_directory" @click="enterDirectory(file.path)"
-                                                                class="text-blue-600 hover:text-blue-900 hover:underline text-left"
-                                                                x-text="file.name"></button>
-                                                        <span x-show="!file.is_directory" x-text="file.name"></span>
+                                                        <div class="flex items-center space-x-2">
+                                                            <button x-show="file.is_directory" @click="enterDirectory(file.path)"
+                                                                    class="text-blue-600 hover:text-blue-900 hover:underline text-left"
+                                                                    x-text="file.name"></button>
+                                                            <span x-show="!file.is_directory" x-text="file.name"></span>
+                                                            <!-- 调试按钮 -->
+                                                            <button x-show="!file.is_directory && (file.name.endsWith('.py') || file.name.endsWith('.js'))"
+                                                                    @click="startDebugScript(file)"
+                                                                    class="link-primary hover:text-blue-900 text-xs px-2 py-1 rounded border border-blue-200 hover:border-blue-300"
+                                                                    title="调试脚本">
+                                                                <i class="fas fa-bug mr-1"></i>调试
+                                                            </button>
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </td>
@@ -678,56 +701,49 @@
                                                     <!-- 打开目录/解压文件 -->
                                                     <div class="flex justify-center">
                                                         <button x-show="file.is_directory" @click="enterDirectory(file.path)"
-                                                                class="text-blue-600 hover:text-blue-900 w-8 h-8 flex items-center justify-center rounded hover:bg-blue-50"
-                                                                title="打开目录">
-                                                            <i class="fas fa-folder-open text-sm"></i>
+                                                                class="link-primary text-xs px-1 py-1 rounded hover:bg-blue-50 min-w-[2rem]">
+                                                            打开
                                                         </button>
                                                         <button x-show="!file.is_directory && isArchiveFile(file.name)"
                                                                 @click="startExtract(file)"
-                                                                class="text-yellow-600 hover:text-yellow-900 w-8 h-8 flex items-center justify-center rounded hover:bg-yellow-50"
-                                                                title="解压文件">
-                                                            <i class="fas fa-expand-arrows-alt text-sm"></i>
+                                                                class="link-primary text-xs px-1 py-1 rounded hover:bg-blue-50 min-w-[2rem]">
+                                                            解压
                                                         </button>
                                                     </div>
                                                     <!-- 预览文件 -->
                                                     <div class="flex justify-center">
                                                         <button x-show="!file.is_directory && isTextFile(file.name)" @click="previewFile(file)"
-                                                                class="text-purple-600 hover:text-purple-900 w-8 h-8 flex items-center justify-center rounded hover:bg-purple-50"
-                                                                title="预览文件">
-                                                            <i class="fas fa-eye text-sm"></i>
+                                                                class="link-primary text-xs px-1 py-1 rounded hover:bg-blue-50 min-w-[2rem]">
+                                                            预览
                                                         </button>
                                                     </div>
                                                     <!-- 复制路径 -->
                                                     <div class="flex justify-center">
                                                         <button x-show="!file.is_directory && (file.name.endsWith('.py') || file.name.endsWith('.js'))"
                                                                 @click="copyFilePath(file.path)"
-                                                                class="text-green-600 hover:text-green-900 w-8 h-8 flex items-center justify-center rounded hover:bg-green-50"
-                                                                title="复制路径">
-                                                            <i class="fas fa-copy text-sm"></i>
+                                                                class="link-primary text-xs px-1 py-1 rounded hover:bg-blue-50 min-w-[2rem]">
+                                                            复制
                                                         </button>
                                                     </div>
                                                     <!-- 重命名 -->
                                                     <div class="flex justify-center">
                                                         <button @click="startRename(file)"
-                                                                class="text-orange-600 hover:text-orange-900 w-8 h-8 flex items-center justify-center rounded hover:bg-orange-50"
-                                                                title="重命名">
-                                                            <i class="fas fa-edit text-sm"></i>
+                                                                class="link-primary text-xs px-1 py-1 rounded hover:bg-blue-50 min-w-[2rem]">
+                                                            更名
                                                         </button>
                                                     </div>
                                                     <!-- 下载文件 -->
                                                     <div class="flex justify-center">
                                                         <button x-show="!file.is_directory" @click="downloadFile(file.path)"
-                                                                class="text-blue-600 hover:text-blue-900 w-8 h-8 flex items-center justify-center rounded hover:bg-blue-50"
-                                                                title="下载文件">
-                                                            <i class="fas fa-download text-sm"></i>
+                                                                class="link-primary text-xs px-1 py-1 rounded hover:bg-blue-50 min-w-[2rem]">
+                                                            下载
                                                         </button>
                                                     </div>
                                                     <!-- 删除 -->
                                                     <div class="flex justify-center">
                                                         <button @click="deleteFile(file)"
-                                                                class="text-red-600 hover:text-red-900 w-8 h-8 flex items-center justify-center rounded hover:bg-red-50"
-                                                                title="删除">
-                                                            <i class="fas fa-trash text-sm"></i>
+                                                                class="link-primary text-xs px-1 py-1 rounded hover:bg-blue-50 min-w-[2rem]">
+                                                            删除
                                                         </button>
                                                     </div>
                                                 </div>
@@ -736,6 +752,88 @@
                                     </template>
                                 </tbody>
                             </table>
+                        </div>
+                    </div>
+                    </div>
+
+                    <!-- 脚本调试模式 -->
+                    <div x-show="debugMode.active">
+                        <!-- 调试工具栏 -->
+                        <div class="mb-6 flex flex-col sm:flex-row gap-4 items-center justify-between">
+                            <div class="flex items-center space-x-4">
+                                <h2 class="text-xl font-semibold text-gray-900">
+                                    <i class="fas fa-bug mr-2"></i>
+                                    脚本调试: <span x-text="debugMode.scriptName"></span>
+                                </h2>
+                                <span x-show="debugMode.status !== 'idle'"
+                                      :class="debugMode.status === 'running' ? 'bg-green-100 text-green-800' :
+                                             debugMode.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                                             debugMode.status === 'error' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'"
+                                      class="inline-flex px-2 py-1 text-xs font-semibold rounded-full">
+                                    <span x-text="debugMode.status === 'running' ? '运行中' :
+                                                 debugMode.status === 'completed' ? '已完成' :
+                                                 debugMode.status === 'error' ? '错误' : ''"></span>
+                                </span>
+                            </div>
+                            <div class="flex space-x-3">
+                                <button @click="saveDebugScript()"
+                                        :disabled="debugMode.saving"
+                                        class="btn-primary text-white px-4 py-2 rounded-lg flex items-center">
+                                    <i class="fas fa-save mr-2"></i>
+                                    <span x-text="debugMode.saving ? '保存中...' : '保存文件'"></span>
+                                </button>
+                                <button @click="runDebugScript()"
+                                        :disabled="debugMode.running"
+                                        class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center">
+                                    <i class="fas fa-play mr-2"></i>
+                                    <span x-text="debugMode.running ? '运行中...' : '运行脚本'"></span>
+                                </button>
+                                <button @click="closeDebugMode()"
+                                        class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg flex items-center">
+                                    <i class="fas fa-times mr-2"></i>
+                                    关闭调试
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 调试内容区域 -->
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6" style="height: calc(100vh - 160px)">
+                            <!-- 左侧：代码编辑器 -->
+                            <div class="bg-white rounded-lg shadow flex flex-col">
+                                <div class="px-6 py-4 border-b border-gray-200 flex-shrink-0">
+                                    <h3 class="text-lg font-medium text-gray-900">代码编辑器</h3>
+                                </div>
+                                <div class="p-4 flex-1 min-h-0">
+                                    <div id="code-editor"
+                                         class="w-full h-full border border-gray-300 rounded-md overflow-hidden"
+                                         style="height: calc(100vh - 280px); max-height: calc(100vh - 280px);">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 右侧：输出区域 -->
+                            <div class="bg-white rounded-lg shadow flex flex-col">
+                                <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
+                                    <h3 class="text-lg font-medium text-gray-900">输出信息</h3>
+                                    <button @click="clearDebugOutput()"
+                                            class="text-gray-500 hover:text-gray-700 text-sm">
+                                        <i class="fas fa-trash mr-1"></i>
+                                        清空
+                                    </button>
+                                </div>
+                                <div class="p-4 flex-1 min-h-0">
+                                    <div class="bg-black text-green-400 font-mono text-sm p-3 rounded-md overflow-y-auto"
+                                         style="height: calc(100vh - 280px); max-height: calc(100vh - 280px);"
+                                         x-ref="debugOutput">
+                                        <div x-show="debugMode.output.length === 0" class="text-gray-500">
+                                            等待脚本输出...
+                                        </div>
+                                        <template x-for="(line, index) in debugMode.output" :key="index">
+                                            <div class="mb-1" x-text="line"></div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -834,7 +932,7 @@
                         <!-- 分页控件 -->
                         <div x-show="!logsLoading && logPagination.totalPages > 1" class="px-4 sm:px-6 py-4 border-t border-gray-200">
                             <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
-                                <!-- 信息统计 - 现在单独一行显示在手机上 -->
+                                <!-- 信息统计 - 在手机上单独一行显示 -->
                                 <div class="text-sm text-gray-700 text-center sm:text-left w-full sm:w-auto">
                                     显示第 <span x-text="(logPagination.currentPage - 1) * logPagination.pageSize + 1" class="font-medium"></span> 到
                                     <span x-text="Math.min(logPagination.currentPage * logPagination.pageSize, logPagination.total)" class="font-medium"></span> 条，
@@ -882,7 +980,7 @@
                         <button @click="showEnvModal = true; editingEnv = null; resetEnvForm()"
                                 class="btn-primary text-white px-4 py-2 rounded-lg flex items-center">
                             <i class="fas fa-plus mr-2"></i>
-                            添加环境变量
+                            创建变量
                         </button>
                     </div>
 
@@ -913,7 +1011,14 @@
                                     <template x-for="env in envVars" :key="env.id">
                                         <tr>
                                             <td class="px-3 sm:px-6 py-4 whitespace-nowrap">
-                                                <div class="text-sm font-medium text-gray-900" x-text="env.key"></div>
+                                                <div class="flex items-center space-x-2">
+                                                    <span class="text-sm font-medium text-gray-900" x-text="env.key"></span>
+                                                    <button @click="copyVariableName(env.key)"
+                                                            class="link-primary hover:text-blue-900 text-xs"
+                                                            title="复制变量名">
+                                                        <i class="fas fa-copy"></i>
+                                                    </button>
+                                                </div>
                                             </td>
                                             <td class="px-3 sm:px-6 py-4 whitespace-nowrap">
                                                 <div class="text-sm text-gray-900 max-w-xs sm:max-w-sm">
@@ -931,8 +1036,8 @@
                                                 <div class="text-sm text-gray-500" x-text="formatDateTime(env.updated_at || env.created_at)"></div>
                                             </td>
                                             <td class="px-3 sm:px-6 py-4 whitespace-nowrap text-sm font-medium space-x-1 sm:space-x-2">
-                                                <button @click="editEnv(env)" class="text-blue-600 hover:text-blue-900">编辑</button>
-                                                <button @click="deleteEnv(env)" class="text-red-600 hover:text-red-900">删除</button>
+                                                <button @click="editEnv(env)" class="link-primary">编辑</button>
+                                                <button @click="deleteEnv(env)" class="link-primary">删除</button>
                                             </td>
                                         </tr>
                                     </template>
@@ -1101,15 +1206,23 @@
 
                         <!-- 任务通知设置 -->
                         <div class="bg-white rounded-lg shadow">
-                            <div class="px-6 py-4 border-b border-gray-200">
-                                <h3 class="text-lg font-medium text-gray-900">任务通知设置</h3>
-                                <!-- <p class="text-sm text-gray-500 mt-1">为每个任务配置通知方式和条件</p> -->
-                                <p class="text-sm text-gray-500 mt-1">激活后的通知方式才能被选择</p>
+                            <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                                <div>
+                                    <h3 class="text-lg font-medium text-gray-900">任务通知设置</h3>
+                                    <!-- <p class="text-sm text-gray-500 mt-1">为每个任务配置通知方式和条件</p> -->
+                                    <p class="text-sm text-gray-500 mt-1">激活后的通知方式才能被选择</p>
+                                </div>
+                                <button @click="loadNotificationTasks(1)"
+                                        :disabled="tasksLoading"
+                                        class="px-4 py-2 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white rounded-lg text-sm flex items-center space-x-2">
+                                    <i class="fas fa-sync-alt" :class="{'fa-spin': tasksLoading}"></i>
+                                    <span>刷新列表</span>
+                                </button>
                             </div>
                             <div class="p-6">
                                 <div x-show="!tasksLoading">
                                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                        <template x-for="task in tasks" :key="task.id">
+                                        <template x-for="task in notificationTasks" :key="task.id">
                                             <div class="border rounded-lg p-4 hover:border-gray-300 transition-colors"
                                                  x-init="updateTaskNotificationIndicator(task.id)">
                                                 <div class="space-y-4">
@@ -1163,8 +1276,53 @@
                                             </div>
                                         </template>
                                     </div>
-                                    <div x-show="tasks.length === 0" class="text-center py-8 text-gray-500">
+                                    <div x-show="notificationTasks.length === 0" class="text-center py-8 text-gray-500">
                                         暂无任务
+                                    </div>
+
+                                    <!-- 分页组件 -->
+                                    <div x-show="notificationTasksPagination.totalPages > 1" class="mt-6 border-t border-gray-200 pt-6">
+                                        <div class="flex flex-col sm:flex-row justify-between items-center gap-4">
+                                            <!-- 分页信息 -->
+                                            <div class="text-sm text-gray-700">
+                                                显示第 <span x-text="(notificationTasksPagination.page - 1) * notificationTasksPagination.pageSize + 1"></span>
+                                                到 <span x-text="Math.min(notificationTasksPagination.page * notificationTasksPagination.pageSize, notificationTasksPagination.total)"></span>
+                                                条，共 <span x-text="notificationTasksPagination.total"></span> 个任务
+                                            </div>
+
+                                            <!-- 分页按钮 -->
+                                            <div class="flex items-center space-x-2">
+                                                <!-- 上一页 -->
+                                                <button @click="goToNotificationTaskPage(notificationTasksPagination.page - 1)"
+                                                        :disabled="notificationTasksPagination.page <= 1"
+                                                        :class="notificationTasksPagination.page <= 1 ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'"
+                                                        class="px-3 py-2 text-white rounded-lg text-sm">
+                                                    上一页
+                                                </button>
+
+                                                <!-- 页码按钮 -->
+                                                <template x-for="page in Array.from({length: Math.min(5, notificationTasksPagination.totalPages)}, (_, i) => {
+                                                    const start = Math.max(1, notificationTasksPagination.page - 2);
+                                                    const end = Math.min(notificationTasksPagination.totalPages, start + 4);
+                                                    const adjustedStart = Math.max(1, end - 4);
+                                                    return adjustedStart + i;
+                                                }).filter(p => p <= notificationTasksPagination.totalPages)" :key="page">
+                                                    <button @click="goToNotificationTaskPage(page)"
+                                                            :class="page === notificationTasksPagination.page ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
+                                                            class="px-3 py-2 rounded-lg text-sm"
+                                                            x-text="page">
+                                                    </button>
+                                                </template>
+
+                                                <!-- 下一页 -->
+                                                <button @click="goToNotificationTaskPage(notificationTasksPagination.page + 1)"
+                                                        :disabled="notificationTasksPagination.page >= notificationTasksPagination.totalPages"
+                                                        :class="notificationTasksPagination.page >= notificationTasksPagination.totalPages ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'"
+                                                        class="px-3 py-2 text-white rounded-lg text-sm">
+                                                    下一页
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                                 <div x-show="tasksLoading" class="text-center py-8 text-gray-500">
@@ -1579,21 +1737,18 @@
                                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                                                 <button @click="syncSubscription(subscription)"
                                                         :disabled="isSyncingSubscription(subscription.id)"
-                                                        :class="isSyncingSubscription(subscription.id) ? 'text-gray-400 cursor-not-allowed' : 'text-blue-600 hover:text-blue-900'">
+                                                        :class="isSyncingSubscription(subscription.id) ? 'text-gray-400 cursor-not-allowed' : 'link-primary'">
                                                     <i :class="isSyncingSubscription(subscription.id) ? 'fas fa-spinner fa-spin mr-1' : 'fas fa-sync-alt mr-1'"></i>
                                                     <span x-text="isSyncingSubscription(subscription.id) ? '同步中' : '同步'"></span>
                                                 </button>
                                                 <button @click="loadSubscriptionLogs(subscription)"
-                                                        class="text-green-600 hover:text-green-900">
-                                                    <i class="fas fa-list-alt mr-1"></i>日志
+                                                        class="link-primary">日志
                                                 </button>
                                                 <button @click="openSubscriptionModal(subscription)"
-                                                        class="text-indigo-600 hover:text-indigo-900">
-                                                    <i class="fas fa-edit mr-1"></i>编辑
+                                                        class="link-primary">编辑
                                                 </button>
                                                 <button @click="deleteSubscription(subscription)"
-                                                        class="text-red-600 hover:text-red-900">
-                                                    <i class="fas fa-trash mr-1"></i>删除
+                                                        class="link-primary">删除
                                                 </button>
                                             </td>
                                         </tr>
@@ -1643,7 +1798,15 @@
                                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700">当前版本</label>
-                                            <p class="mt-1 text-sm text-gray-900" x-text="versionInfo.current_version || '加载中...'"></p>
+                                            <div class="mt-1 flex items-center space-x-2">
+                                                <p class="text-sm text-gray-900" x-text="versionInfo.current_version || '加载中...'"></p>
+                                                <button @click="showVersionHistoryModal()"
+                                                        class="link-primary hover:text-blue-900 text-xs"
+                                                        title="查看历史版本">
+                                                    <i class="fas fa-history"></i>
+                                                    历史
+                                                </button>
+                                            </div>
                                         </div>
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700">最新版本</label>
@@ -1935,12 +2098,9 @@
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700 mb-2">Python包管理器</label>
                                             <div class="flex space-x-2">
-                                                <select x-model="commandConfig.python_package_manager"
-                                                        class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm">
-                                                    <option value="pip">pip</option>
-                                                    <option value="conda">conda</option>
-                                                    <option value="poetry">poetry</option>
-                                                </select>
+                                                <input type="text" x-model="commandConfig.python_package_manager"
+                                                       placeholder="pip"
+                                                       class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm">
                                                 <button @click="testPackageManager('python')"
                                                         :disabled="isTestingPackageManager"
                                                         class="px-3 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-md text-sm whitespace-nowrap">
@@ -1951,7 +2111,7 @@
                                                 </button>
                                             </div>
                                             <p class="mt-1 text-xs text-gray-500">
-                                                选择Python包管理工具
+                                                例如: pip、conda、poetry、完整路径
                                             </p>
                                             <div x-show="packageManagerTestResult.python" class="mt-2">
                                                 <div x-show="packageManagerTestResult.python && packageManagerTestResult.python.success" class="text-sm text-green-600">
@@ -1969,12 +2129,9 @@
                                         <div>
                                             <label class="block text-sm font-medium text-gray-700 mb-2">Node.js包管理器</label>
                                             <div class="flex space-x-2">
-                                                <select x-model="commandConfig.nodejs_package_manager"
-                                                        class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm">
-                                                    <option value="npm">npm</option>
-                                                    <option value="yarn">yarn</option>
-                                                    <option value="pnpm">pnpm</option>
-                                                </select>
+                                                <input type="text" x-model="commandConfig.nodejs_package_manager"
+                                                       placeholder="npm"
+                                                       class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm">
                                                 <button @click="testPackageManager('nodejs')"
                                                         :disabled="isTestingPackageManager"
                                                         class="px-3 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-md text-sm whitespace-nowrap">
@@ -1985,7 +2142,7 @@
                                                 </button>
                                             </div>
                                             <p class="mt-1 text-xs text-gray-500">
-                                                选择Node.js包管理工具
+                                                例如: npm、yarn、pnpm、完整路径
                                             </p>
                                             <div x-show="packageManagerTestResult.nodejs" class="mt-2">
                                                 <div x-show="packageManagerTestResult.nodejs && packageManagerTestResult.nodejs.success" class="text-sm text-green-600">
@@ -2072,8 +2229,8 @@
                                                 </div>
                                                 <div>
                                                     <label class="block text-sm font-medium text-gray-700">当前时间</label>
-                                                    <p class="mt-1 text-sm text-gray-900" x-text="systemInfo && systemInfo.timezone_info ? systemInfo.timezone_info.current_time : '加载中...'"></p>
-                                                    <p class="text-xs text-gray-500" x-text="systemInfo && systemInfo.timezone_info ? `UTC: ${systemInfo.timezone_info.utc_time}` : ''"></p>
+                                                    <p class="mt-1 text-sm text-gray-900" x-text="currentTime ? formatDynamicTime(currentTime.local) : '加载中...'"></p>
+                                                    <p class="text-xs text-gray-500" x-text="currentTime ? `UTC: ${formatDynamicTime(currentTime.utc)}` : ''"></p>
                                                 </div>
                                             </div>
                                             <div>
@@ -2428,20 +2585,22 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">任务分组</label>
-                        <div class="mt-1 flex space-x-2">
+                        <div class="mt-1 space-y-2">
                             <select x-model="taskForm.group_name" required
-                                    class="flex-1 border border-gray-300 rounded-md px-3 py-2">
+                                    class="w-full border border-gray-300 rounded-md px-3 py-2">
                                 <option value="默认">默认</option>
                                 <template x-for="group in taskGroups.filter(g => g !== '默认')" :key="group">
                                     <option :value="group" x-text="group"></option>
                                 </template>
                             </select>
-                            <input type="text" x-model="newGroupName" placeholder="新分组名"
-                                   class="flex-1 border border-gray-300 rounded-md px-3 py-2">
-                            <button type="button" @click="if(newGroupName.trim()) { taskForm.group_name = newGroupName.trim(); newGroupName = ''; }"
-                                    class="px-3 py-2 bg-green-500 text-white rounded-md whitespace-nowrap text-sm">
-                                新建
-                            </button>
+                            <div class="flex space-x-2">
+                                <input type="text" x-model="newGroupName" placeholder="新分组名"
+                                       class="flex-1 border border-gray-300 rounded-md px-3 py-2">
+                                <button type="button" @click="createNewGroup()"
+                                        class="px-4 py-2 bg-green-500 text-white rounded-md whitespace-nowrap text-sm hover:bg-green-600 transition-colors">
+                                    新建
+                                </button>
+                            </div>
                         </div>
                     </div>
                     <div>
@@ -2449,11 +2608,14 @@
                         <div class="mt-1 flex space-x-2">
                             <input type="text" x-model="taskForm.cron_expression" required
                                    class="flex-1 border border-gray-300 rounded-md px-3 py-2"
-                                   placeholder="例如: 0 */1 * * * (每小时执行)">
+                                   placeholder="5字段: 0 */1 * * * (每小时) 或 6字段: 0 0 */1 * * * (每小时0分0秒)">
                             <button type="button" @click="showCronGeneratorModal = true"
                                     class="px-4 py-2 btn-primary text-white rounded-md whitespace-nowrap">
                                 Cron生成
                             </button>
+                        </div>
+                        <div class="mt-1 text-xs text-gray-500">
+                            支持传统5字段格式和秒级6字段格式。6字段格式: 秒 分 时 日 月 周
                         </div>
                     </div>
                     <div class="flex justify-end space-x-3 pt-4">
@@ -2480,6 +2642,16 @@
                     <h3 class="text-lg font-medium text-gray-900">Cron表达式生成器</h3>
                 </div>
                 <div class="p-6 space-y-6">
+                    <!-- 秒级精度开关 -->
+                    <div>
+                        <label class="flex items-center space-x-2 mb-4">
+                            <input type="checkbox" x-model="enableSeconds" @change="toggleSecondsMode()"
+                                   class="h-4 w-4 text-blue-600 border-gray-300 rounded">
+                            <span class="text-sm font-medium text-gray-700">启用秒级精度</span>
+                            <span class="text-xs text-gray-500">(支持6字段CRON表达式)</span>
+                        </label>
+                    </div>
+
                     <!-- 预设模板 -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-3">常用模板</label>
@@ -2508,13 +2680,47 @@
                                 <div class="text-sm text-gray-500">0 0 1 * *</div>
                                 <div class="text-xs text-gray-400">每月1日凌晨执行</div>
                             </button>
+                            <!-- 秒级模板 -->
+                            <template x-if="enableSeconds">
+                                <button @click="applyCronTemplate('*/30 * * * * *')" type="button"
+                                        class="text-left p-3 border border-blue-300 rounded-md hover:bg-blue-50 bg-blue-25">
+                                    <div class="font-medium text-blue-800">每30秒执行</div>
+                                    <div class="text-sm text-blue-600">*/30 * * * * *</div>
+                                    <div class="text-xs text-blue-400">每30秒执行一次</div>
+                                </button>
+                            </template>
+                            <template x-if="enableSeconds">
+                                <button @click="applyCronTemplate('0 */5 * * * *')" type="button"
+                                        class="text-left p-3 border border-blue-300 rounded-md hover:bg-blue-50 bg-blue-25">
+                                    <div class="font-medium text-blue-800">每5分钟整点</div>
+                                    <div class="text-sm text-blue-600">0 */5 * * * *</div>
+                                    <div class="text-xs text-blue-400">每5分钟的0秒执行</div>
+                                </button>
+                            </template>
                         </div>
                     </div>
 
                     <!-- 自定义设置 -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-3">自定义设置</label>
-                        <div class="grid grid-cols-5 gap-4">
+                        <div :class="enableSeconds ? 'grid grid-cols-6 gap-3' : 'grid grid-cols-5 gap-4'">
+                            <!-- 秒 (仅在启用秒级精度时显示) -->
+                            <template x-if="enableSeconds">
+                                <div>
+                                    <label class="block text-xs font-medium text-blue-600 mb-1">秒</label>
+                                    <select x-model="cronForm.second" @change="updateCronExpression()"
+                                            class="w-full text-sm border border-blue-300 rounded px-2 py-1">
+                                        <option value="*">每秒</option>
+                                        <option value="*/5">每5秒</option>
+                                        <option value="*/10">每10秒</option>
+                                        <option value="*/15">每15秒</option>
+                                        <option value="*/30">每30秒</option>
+                                        <template x-for="i in 60" :key="i">
+                                            <option :value="i-1" x-text="i-1"></option>
+                                        </template>
+                                    </select>
+                                </div>
+                            </template>
                             <!-- 分钟 -->
                             <div>
                                 <label class="block text-xs font-medium text-gray-600 mb-1">分钟</label>
@@ -2774,7 +2980,8 @@
                                 <option value="pushplus">PushPlus</option>
                                 <option value="wxpusher">WxPusher</option>
                                 <option value="telegram">Telegram机器人</option>
-                                <option value="wecom">企业微信</option>
+                                <option value="wecom">企微WebHook</option>
+                                <option value="wecom_app">企微应用通知</option>
                                 <option value="serverchan">Server酱</option>
                                 <option value="dingtalk">钉钉机器人</option>
                                 <option value="bark">Bark</option>
@@ -2900,13 +3107,52 @@
                             </div>
                         </div>
 
-                        <!-- 企业微信配置 -->
+                        <!-- 企业微信WebHook配置 -->
                         <div x-show="notificationConfigForm.name === 'wecom'" class="space-y-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Webhook URL</label>
                                 <input type="url" x-model="notificationConfigForm.config.webhook_url"
                                        class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2"
                                        placeholder="请输入企业微信机器人Webhook URL">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">消息类型</label>
+                                <select x-model="notificationConfigForm.config.msg_type"
+                                        class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2">
+                                    <option value="text">文本</option>
+                                    <option value="markdown">Markdown</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- 企业微信应用通知配置 -->
+                        <div x-show="notificationConfigForm.name === 'wecom_app'" class="space-y-4">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">企业ID (CorpID)</label>
+                                    <input type="text" x-model="notificationConfigForm.config.corp_id"
+                                           class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2"
+                                           placeholder="请输入企业ID">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">应用ID (AgentID)</label>
+                                    <input type="text" x-model="notificationConfigForm.config.agent_id"
+                                           class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2"
+                                           placeholder="请输入应用ID">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">应用密钥 (Secret)</label>
+                                <input type="password" x-model="notificationConfigForm.config.corp_secret"
+                                       class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2"
+                                       placeholder="请输入应用密钥">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">接收用户</label>
+                                <input type="text" x-model="notificationConfigForm.config.to_user"
+                                       class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2"
+                                       placeholder="@all 或指定用户ID，多个用|分隔">
+                                <p class="text-xs text-gray-500 mt-1">@all表示发送给所有用户，或输入具体用户ID</p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">消息类型</label>
@@ -3541,6 +3787,78 @@
             </div>
             <div class="px-6 border-t border-gray-200 flex justify-end">
                 <button @click="closeVersionModal()"
+                        class="btn-primary text-white px-6 py-2 rounded-lg transition-colors">
+                    关闭
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 历史版本模态框 -->
+    <div x-show="showVersionHistoryModalVisible" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div class="px-6 py-4 border-b border-gray-200 flex-shrink-0">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-medium text-gray-900">
+                        <i class="fas fa-history mr-2"></i>
+                        版本历史
+                    </h3>
+                    <button @click="closeVersionHistoryModal()" class="text-gray-400 hover:text-gray-600">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6">
+                <div x-show="versionHistoryLoading" class="text-center py-8 text-gray-500">
+                    <i class="fas fa-spinner fa-spin mr-2"></i>
+                    加载中...
+                </div>
+                <div x-show="!versionHistoryLoading && versionHistory.length === 0" class="text-center py-8 text-gray-500">
+                    暂无版本历史
+                </div>
+                <div x-show="!versionHistoryLoading && versionHistory.length > 0" class="space-y-6">
+                    <template x-for="version in versionHistory" :key="version.version">
+                        <div class="border border-gray-200 rounded-lg p-6">
+                            <div class="flex items-center justify-between mb-4">
+                                <div class="flex items-center space-x-3">
+                                    <h4 class="text-lg font-semibold text-gray-900" x-text="'v' + version.version"></h4>
+                                    <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800"
+                                          x-text="version.release_date"></span>
+                                </div>
+                            </div>
+                            <p class="text-gray-600 mb-4" x-text="version.description"></p>
+
+                            <!-- 优化和改进 -->
+                            <div x-show="version.features && version.features.length > 0" class="mb-4">
+                                <h5 class="text-sm font-medium text-green-700 mb-2">
+                                    <i class="fas fa-plus-circle mr-1"></i>
+                                    优化和改进
+                                </h5>
+                                <ul class="list-disc list-inside space-y-1 text-sm text-gray-600 ml-4">
+                                    <template x-for="feature in version.features" :key="feature">
+                                        <li x-text="feature"></li>
+                                    </template>
+                                </ul>
+                            </div>
+
+                            <!-- 修复内容 -->
+                            <div x-show="version.bug_fixes && version.bug_fixes.length > 0">
+                                <h5 class="text-sm font-medium text-orange-700 mb-2">
+                                    <i class="fas fa-bug mr-1"></i>
+                                    修复内容
+                                </h5>
+                                <ul class="list-disc list-inside space-y-1 text-sm text-gray-600 ml-4">
+                                    <template x-for="fix in version.bug_fixes" :key="fix">
+                                        <li x-text="fix"></li>
+                                    </template>
+                                </ul>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-200 flex-shrink-0 flex justify-end">
+                <button @click="closeVersionHistoryModal()"
                         class="btn-primary text-white px-6 py-2 rounded-lg transition-colors">
                     关闭
                 </button>
@@ -4570,6 +4888,30 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=1.1"></script>
+    <!-- 全局任务分组下拉菜单（任务管理页任务分组专用，防止浏览器使用纵向进度条遮挡下拉选项） -->
+    <div x-show="activeGroupDropdown"
+         x-transition:enter="transition ease-out duration-100"
+         x-transition:enter-start="transform opacity-0 scale-95"
+         x-transition:enter-end="transform opacity-100 scale-100"
+         x-transition:leave="transition ease-in duration-75"
+         x-transition:leave-start="transform opacity-100 scale-100"
+         x-transition:leave-end="transform opacity-0 scale-95"
+         class="fixed bg-white rounded-lg shadow-lg border border-gray-200 z-[9999] w-32"
+         :style="'top: ' + groupDropdownPosition.top + 'px; left: ' + groupDropdownPosition.left + 'px;'">
+        <div class="py-1">
+            <button @click="showRenameGroupModal(activeGroupDropdown)"
+                    class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center">
+                <i class="fas fa-edit mr-2"></i>
+                重命名
+            </button>
+            <button @click="showDeleteGroupModal(activeGroupDropdown)"
+                    class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center">
+                <i class="fas fa-trash mr-2"></i>
+                删除
+            </button>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=1.2"></script><!-- app.js增加版本号是因为防止缓存导致数据显示错误，增加版本号可以强制浏览器刷新使用新版本 -->
 </body>
 </html>

@@ -258,6 +258,27 @@ async def get_system_version(current_user: User = Depends(get_current_user), db:
         "source": "database"  # 标识来源于数据库
     }
 
+@router.get("/version-history")
+async def get_version_history(current_user: User = Depends(get_current_user)):
+    """获取版本历史记录"""
+    from app.version import VERSION_HISTORY, compare_versions
+
+    # 获取所有版本并按版本号倒序排列
+    versions = []
+    for version, info in VERSION_HISTORY.items():
+        versions.append({
+            "version": version,
+            "release_date": info.get("release_date"),
+            "description": info.get("description"),
+            "features": info.get("features", []),
+            "bug_fixes": info.get("bug_fixes", [])
+        })
+
+    # 按版本号倒序排列（最新版本在前）
+    versions.sort(key=lambda x: x["version"], reverse=True)
+
+    return {"versions": versions}
+
 @router.get("/color-scheme")
 async def get_color_scheme(current_user: User = Depends(get_current_user)):
     """获取用户配色方案"""
