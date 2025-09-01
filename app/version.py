@@ -3,13 +3,24 @@
 """
 
 # 当前应用版本
-CURRENT_VERSION = "1.25.6"
+CURRENT_VERSION = "1.25.7"
 
 # 版本描述
 VERSION_DESCRIPTION = "Pinchy - Python、Node.js脚本调度执行系统"
 
 # 版本历史记录
 VERSION_HISTORY = {
+    "1.25.7": {
+        "release_date": "2025-09-01",
+        "description": "优化任务管理界面、下次运行时间",
+        "features": [
+            "“任务管理”页面分组按钮改为TAB标签页形式，优化间距和圆角效果",
+            "“任务管理”页面下次运行时间由后端实时，提高准确性"
+        ],
+        "bug_fixes": [
+            "修复“下次运行时间”计算逻辑，确保前后端一致性"
+        ]
+    },
     "1.25.6": {
         "release_date": "2025-06-30",
         "description": "新增脚本调试与秒级Cron、企微应用通知",

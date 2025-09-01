@@ -395,63 +395,69 @@
                         </button>
                     </div>
 
-                    <!-- 任务分组标签 -->
+                    <!-- 任务分组TAB标签页 -->
                     <div class="bg-white rounded-lg shadow mb-4" @click.away="closeGroupDropdown()">
-                        <div class="px-6 py-4">
-                            <div class="flex gap-2 overflow-x-auto pb-2" style="scrollbar-width: thin; scrollbar-color: #cbd5e0 #f7fafc;">
+                        <div class="border-b border-gray-200">
+                            <nav class="-mb-px flex overflow-x-auto" style="scrollbar-width: thin; scrollbar-color: #cbd5e0 #f7fafc;">
                                 <style>
-                                    .flex.gap-2.overflow-x-auto::-webkit-scrollbar {
+                                    nav.flex.overflow-x-auto::-webkit-scrollbar {
                                         height: 4px;
                                     }
-                                    .flex.gap-2.overflow-x-auto::-webkit-scrollbar-track {
+                                    nav.flex.overflow-x-auto::-webkit-scrollbar-track {
                                         background: #f7fafc;
                                         border-radius: 2px;
                                     }
-                                    .flex.gap-2.overflow-x-auto::-webkit-scrollbar-thumb {
+                                    nav.flex.overflow-x-auto::-webkit-scrollbar-thumb {
                                         background: #cbd5e0;
                                         border-radius: 2px;
                                     }
-                                    .flex.gap-2.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+                                    nav.flex.overflow-x-auto::-webkit-scrollbar-thumb:hover {
                                         background: #a0aec0;
                                     }
                                 </style>
+                                <!-- 全部标签 -->
                                 <button @click="switchTaskGroup('all')"
-                                        :class="currentTaskGroup === 'all' ? 'btn-primary text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
-                                        class="px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap">
-                                    全部 (<span x-text="taskPagination.total"></span>)
+                                        :class="currentTaskGroup === 'all' ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                                        class="whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm transition-all duration-200 flex items-center">
+                                    <i class="fas fa-list mr-2"></i>
+                                    全部
+                                    <span class="ml-2 px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-600" x-text="taskPagination.total"></span>
                                 </button>
+
+                                <!-- 分组标签 -->
                                 <template x-for="group in taskGroups" :key="group">
-                                    <div class="relative">
-                                        <div class="flex items-center">
-                                            <button @click="switchTaskGroup(group)"
-                                                    :class="currentTaskGroup === group ? 'btn-primary text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
-                                                    class="px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap"
-                                                    x-text="group">
-                                            </button>
-                                            <button @click="toggleGroupDropdown(group, $event)"
-                                                    :class="currentTaskGroup === group ? 'btn-primary text-white hover:opacity-90' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'"
-                                                    class="px-2 py-2 text-sm transition-colors border-l border-gray-300"
-                                                    :id="'group-dropdown-btn-' + group">
-                                                <i class="fas fa-chevron-down text-xs"></i>
-                                            </button>
-                                        </div>
+                                    <div class="relative flex">
+                                        <button @click="switchTaskGroup(group)"
+                                                :class="currentTaskGroup === group ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                                                class="whitespace-nowrap py-4 px-4 border-b-2 font-medium text-sm transition-all duration-200 flex items-center">
+                                            <i class="fas fa-folder mr-2"></i>
+                                            <span x-text="group"></span>
+                                        </button>
+                                        <button @click="toggleGroupDropdown(group, $event)"
+                                                :class="currentTaskGroup === group ? 'text-blue-600 hover:text-blue-700' : 'text-gray-400 hover:text-gray-600'"
+                                                class="px-2 py-4 text-sm transition-colors border-b-2 border-transparent"
+                                                :id="'group-dropdown-btn-' + group">
+                                            <i class="fas fa-ellipsis-v text-xs"></i>
+                                        </button>
                                     </div>
                                 </template>
-                            </div>
+                            </nav>
                         </div>
                     </div>
 
                     <!-- 任务列表 -->
                     <div class="bg-white rounded-lg shadow overflow-hidden">
                         <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-                            <h3 class="text-lg font-medium text-gray-900">
-                                任务列表
+                            <div class="flex items-center">
+                                <h3 class="text-lg font-medium text-gray-900">任务列表</h3>
                                 <span x-show="currentTaskGroup && currentTaskGroup !== 'all'"
-                                      class="text-sm text-gray-500 ml-2">
-                                    - <span x-text="currentTaskGroup"></span>
+                                      class="ml-3 px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
+                                    <i class="fas fa-folder mr-1"></i>
+                                    <span x-text="currentTaskGroup"></span>
                                 </span>
-                            </h3>
-                            <div class="text-sm text-gray-500">
+                            </div>
+                            <div class="flex items-center text-sm text-gray-500">
+                                <i class="fas fa-tasks mr-1"></i>
                                 共 <span x-text="taskPagination.total"></span> 个任务
                             </div>
                         </div>
@@ -512,7 +518,7 @@
                                                 </div>
                                             </td>
                                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="getTaskLastRunTime(task.id)"></td>
-                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="getTaskNextRunTime(task)"></td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="task.next_run_time || '未启用'"></td>
                                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                                                 <!-- 运行/停止按钮 -->
                                                 <button x-show="!runningTasks.has(task.id)"
