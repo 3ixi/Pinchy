@@ -58,112 +58,30 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
    cd Pinchy
    ```
 
-3. 创建并使用启动脚本（将以下内容保存为`start.sh`）
+3. 安装依赖并通过 nohup 后台运行
    ```bash
-   #!/bin/bash
+   # 安装 Python 依赖
+   pip3 install -r requirements.txt
 
-   # 检查并安装必要环境
-   check_and_install() {
-     echo "检查系统环境..."
-
-     # 检查Python
-     if ! command -v python3 &> /dev/null; then
-       echo "Python未安装，正在安装Python 3..."
-       sudo apt update && sudo apt install -y python3 python3-pip
-     fi
-
-     # 检查Node.js
-     if ! command -v node &> /dev/null; then
-       echo "Node.js未安装，正在安装Node.js..."
-       curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-       sudo apt install -y nodejs
-     fi
-
-     # 检查Git
-     if ! command -v git &> /dev/null; then
-       echo "Git未安装，正在安装Git..."
-       sudo apt update && sudo apt install -y git
-     fi
-
-     # 安装Python依赖
-     echo "安装Python依赖..."
-     pip3 install -r requirements.txt
-   }
-
-   # 启动Pinchy
-   start_pinchy() {
-     echo "启动Pinchy服务..."
-     # 使用nohup后台运行，输出重定向到日志文件
-     nohup python3 run.py > pinchy.log 2>&1 &
-     echo "Pinchy已在后台启动，进程ID: $!"
-     echo "可以使用 'tail -f pinchy.log' 查看实时日志"
-     echo "可以使用 'ps aux | grep run.py' 查看进程状态"
-   }
-
-   # 停止Pinchy服务
-   stop_pinchy() {
-     echo "正在停止Pinchy服务..."
-     pkill -f "python3 run.py"
-     echo "Pinchy服务已停止"
-   }
-
-   # 主函数
-   main() {
-     case "$1" in
-       start)
-         check_and_install
-         start_pinchy
-         ;;
-       stop)
-         stop_pinchy
-         ;;
-       restart)
-         stop_pinchy
-         sleep 2
-         check_and_install
-         start_pinchy
-         ;;
-       *)
-         echo "用法: $0 {start|stop|restart}"
-         echo "  start   - 启动Pinchy服务"
-         echo "  stop    - 停止Pinchy服务"
-         echo "  restart - 重启Pinchy服务"
-         exit 1
-         ;;
-     esac
-   }
-
-   main "$@"
+   # 启动 Pinchy（使用nohup在后台运行，日志写入pinchy.log）
+   nohup python3 run.py > pinchy.log 2>&1 & echo "Pinchy已在后台启动，进程ID: $!"
    ```
 
-4. 赋予启动脚本执行权限并运行
+4. 服务管理常用命令
    ```bash
-   chmod +x start.sh
-   # 启动服务
-   ./start.sh start
-   # 查看实时日志
-   tail -f pinchy.log
-   ```
-
-5. 服务管理命令
-   ```bash
-   # 启动服务
-   ./start.sh start
-
    # 停止服务
-   ./start.sh stop
+   pkill -f "python3 run.py"
+   # 或者 kill <PID>（如果你记录了启动时输出的PID）
 
-   # 重启服务
-   ./start.sh restart
+   # 重启服务（示例）
+   pkill -f "python3 run.py"; sleep 2; nohup python3 run.py > pinchy.log 2>&1 &
 
-   # 查看服务状态
+   # 查看服务状态与实时日志
    ps aux | grep run.py
-
-   # 查看实时日志
    tail -f pinchy.log
    ```
 
-6. 访问系统地址，默认端口为8000，如http://服务器IP:8000  （默认账号admin密码admin）
+   5. 访问系统地址，默认端口为8000，如http://服务器IP:8000  （默认账号admin密码admin）
 
 **⚠️ 首次登录后请立即修改默认密码！**
 
@@ -171,7 +89,7 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
 
 ### 1. 文件管理
 
-- 在"文件管理"页面上传Python(.py)或Node.js(.js)脚本，并点击复制路径按钮
+- 在"文件管理"页面上传Python（.py）或Node.js（.js）脚本，并点击复制路径按钮
 - 支持创建目录和脚本文件
 - 可以在线预览、编辑、下载、删除文件
 
@@ -206,6 +124,7 @@ Pinchy是一个基于Python+FastAPI开发的脚本调度执行系统，支持通
 - 在"脚本订阅"页面添加Git订阅链接
 - 支持添加多个订阅链接
 - 支持使用代理获取订阅
+- 支持自动创建任务
 
 ### 7.通知服务
 - 在"通知服务"页面配置通知服务
@@ -250,7 +169,7 @@ Pinchy/
 │   ├── js/app.js             # 前端逻辑
 ├── scripts/                  # 用户脚本存储目录
 │   ├── SendNotify.py         # 通知模块
-├── logs/                     # 日志文件目录(启动器使用)
+├── logs/                     # 日志文件目录(EXE启动器使用)
 ├── requirements.txt          # Python依赖
 ├── run.py                    # 启动脚本
 └── README.md                 # 说明文档
